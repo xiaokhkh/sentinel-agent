@@ -4,10 +4,13 @@
 package cli
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -18,6 +21,7 @@ import (
 	"github.com/xiaokhkh/sentinel-agent/internal/executor"
 	"github.com/xiaokhkh/sentinel-agent/internal/llama"
 	"github.com/xiaokhkh/sentinel-agent/internal/mcp"
+	"github.com/xiaokhkh/sentinel-agent/internal/memory"
 	"github.com/xiaokhkh/sentinel-agent/internal/permission"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
 	"github.com/xiaokhkh/sentinel-agent/internal/skills"
@@ -44,6 +48,12 @@ func Run(args []string) int {
 		return cmdSkills()
 	case "context":
 		return cmdContext()
+	case "config":
+		return cmdConfig(args[1:])
+	case "remember":
+		return cmdRemember(args[1:])
+	case "memory":
+		return cmdMemory()
 	case "serve":
 		return cmdServe(args[1:])
 	case "stop":
@@ -113,23 +123,69 @@ func cmdRun(args []string) int {
 		fmt.Printf("local context: kube current-context=%s\n", rag.KubeContext)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout+5*time.Second)
-	defer cancel()
-
-	plan, err := inf.Plan(ctx, task, rag)
-	if errors.Is(err, engine.ErrIntentDowngrade) {
-		fmt.Println()
-		fmt.Println("本地模型无法可靠处理该意图。")
-		fmt.Println("  根据 Sentinel 隐私策略，已停止 —— 不会将你的上下文发往任何云端模型。")
-		fmt.Println("  可尝试：细化指令、切换更强的本地模型，或扩展对应技能包。")
-		return 3
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "inference error:", err)
-		if *provider != "mock" {
-			fmt.Fprintln(os.Stderr, "hint: 本地推理服务未就绪？可先用 --provider mock 体验流程，或启动 Ollama/llama.cpp 后重试。")
+	var plan *engine.Plan
+	transientFacts := []string{}
+	reader := bufio.NewReader(os.Stdin)
+	for round := 0; round < 3; round++ {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout+5*time.Second)
+		next, err := inf.Plan(ctx, task, rag)
+		cancel()
+		if errors.Is(err, engine.ErrIntentDowngrade) {
+			fmt.Println()
+			fmt.Println("本地模型无法可靠处理该意图。")
+			fmt.Println("  根据 Sentinel 隐私策略，已停止 —— 不会将你的上下文发往任何云端模型。")
+			fmt.Println("  可尝试：细化指令、切换更强的本地模型，或扩展对应技能包。")
+			return 3
 		}
-		return 1
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "inference error:", err)
+			if *provider != "mock" {
+				fmt.Fprintln(os.Stderr, "hint: 本地推理服务未就绪？可先用 --provider mock 体验流程，或启动 Ollama/llama.cpp 后重试。")
+			}
+			return 1
+		}
+		plan = next
+		if plan.NeedsInput == nil {
+			break
+		}
+
+		fmt.Println(plan.NeedsInput.Prompt)
+		answer, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			fmt.Fprintln(os.Stderr, "input error:", err)
+			return 1
+		}
+		trimmed := strings.TrimSpace(answer)
+		if trimmed == "" {
+			fmt.Println("no input; aborting")
+			return 2
+		}
+
+		if plan.NeedsInput.Key != "" {
+			store, err := memory.Load()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "memory load error:", err)
+				return 1
+			}
+			if err := store.Set(plan.NeedsInput.Key, trimmed); err != nil {
+				fmt.Fprintln(os.Stderr, "memory set error:", err)
+				return 2
+			}
+			if err := store.Save(); err != nil {
+				fmt.Fprintln(os.Stderr, "memory save error:", err)
+				return 1
+			}
+			fmt.Printf("saved to %s (%s)\n", memory.Path(), plan.NeedsInput.Key)
+		} else {
+			transientFacts = append(transientFacts, trimmed)
+		}
+
+		rag = engine.LoadLocalContext()
+		rag.Facts = append(rag.Facts, transientFacts...)
+	}
+	if plan == nil || plan.NeedsInput != nil {
+		fmt.Println("still missing info; aborting")
+		return 2
 	}
 
 	fmt.Printf("\ngenerated plan (%d action(s)) [mode=%s]:\n\n", len(plan.Actions), pmode)
@@ -262,7 +318,88 @@ func cmdContext() int {
 	if rag.HasKubeConfig {
 		fmt.Printf("  kube context: %s\n", rag.KubeContext)
 	}
+	fmt.Printf("  namespace:    %s\n", rag.Namespace)
 	fmt.Printf("  ssh config:   present=%v path=%s\n", rag.HasSSHConfig, rag.SSHConfigPath)
+	if len(rag.Facts) > 0 {
+		fmt.Println("  memory:")
+		for _, fact := range rag.Facts {
+			fmt.Printf("    - %s\n", fact)
+		}
+	}
+	return 0
+}
+
+func cmdConfig(args []string) int {
+	store, err := memory.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory load error:", err)
+		return 1
+	}
+	switch {
+	case len(args) == 0:
+		raw, err := json.MarshalIndent(store, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "memory encode error:", err)
+			return 1
+		}
+		fmt.Printf("path: %s\n%s\n", memory.Path(), raw)
+		return 0
+	case len(args) == 2 && args[0] == "get":
+		value, ok := store.Get(args[1])
+		if !ok {
+			fmt.Fprintf(os.Stderr, "unknown memory key %q\n", args[1])
+			return 2
+		}
+		fmt.Println(value)
+		return 0
+	case len(args) >= 3 && args[0] == "set":
+		key := args[1]
+		value := strings.Join(args[2:], " ")
+		if err := store.Set(key, value); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		if err := store.Save(); err != nil {
+			fmt.Fprintln(os.Stderr, "memory save error:", err)
+			return 1
+		}
+		fmt.Printf("saved to %s (%s)\n", memory.Path(), key)
+		return 0
+	default:
+		fmt.Fprintln(os.Stderr, "usage: guard config [get <key>|set <key> <value>]")
+		return 2
+	}
+}
+
+func cmdRemember(args []string) int {
+	fact := strings.TrimSpace(strings.Join(args, " "))
+	if fact == "" {
+		fmt.Fprintln(os.Stderr, `usage: guard remember "<fact>"`)
+		return 2
+	}
+	store, err := memory.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory load error:", err)
+		return 1
+	}
+	store.AddFact(fact)
+	if err := store.Save(); err != nil {
+		fmt.Fprintln(os.Stderr, "memory save error:", err)
+		return 1
+	}
+	fmt.Printf("remembered in %s\n", memory.Path())
+	return 0
+}
+
+func cmdMemory() int {
+	store, err := memory.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory load error:", err)
+		return 1
+	}
+	for _, fact := range store.Facts {
+		fmt.Println(fact)
+	}
 	return 0
 }
 
@@ -282,6 +419,11 @@ usage:
   guard policy check "<command>"                test a command against the Policy Guard
   guard skills                                  list available capability packs
   guard context                                 show local RAG context (no secrets)
+  guard config                                  show structured memory config
+  guard config get <key>                        print a structured memory value
+  guard config set <key> <value>                save a structured memory value
+  guard remember "<fact>"                       add a local knowledge fact
+  guard memory                                  list local knowledge facts
   guard serve                                   run llama-server in the foreground
   guard stop                                    stop the background llama-server
   guard model                                   show local model/bootstrap status

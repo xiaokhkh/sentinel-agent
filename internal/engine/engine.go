@@ -27,9 +27,17 @@ type Action struct {
 
 // Plan is the ordered set of actions produced for a task.
 type Plan struct {
-	Task    string   `json:"task"`
-	Actions []Action `json:"actions"`
-	Source  string   `json:"source"`
+	Task       string         `json:"task"`
+	Actions    []Action       `json:"actions"`
+	Source     string         `json:"source"`
+	NeedsInput *Clarification `json:"-"`
+}
+
+// Clarification is a model-requested question whose answer may be stored under
+// a structured-memory dotted key.
+type Clarification struct {
+	Prompt string `json:"prompt"`
+	Key    string `json:"key"`
 }
 
 // ErrIntentDowngrade signals that the local model could not produce a usable

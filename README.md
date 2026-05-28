@@ -175,6 +175,33 @@ Switch via `--provider` or `SENTINEL_PROVIDER`. All speak OpenAI-compatible `/v1
 - **Local RAG never exfiltrates**: only non-secret identifiers (e.g. the current kube context)
   are read into the prompt; credentials and file contents are never read or transmitted.
 
+## Structured memory
+
+`guard` remembers how to reach your systems in `~/.sentinel/config.json` — **paths, references,
+and facts only; never secrets**:
+
+```bash
+guard config set kubernetes.kubeconfig ~/.kube/config
+guard config set kubernetes.namespace payments
+guard remember "payment service runs in namespace payments"
+guard config        # show the store
+guard memory        # list remembered facts
+```
+
+When a task needs access info the agent doesn't have yet (e.g. no kubeconfig), the **system prompt**
+tells the model to ask you in chat instead of guessing — and the answer is saved for next time:
+
+```
+$ guard run "check my k8s pods"
+Which kubeconfig should I use?
+> ~/.kube/config
+saved to ~/.sentinel/config.json (kubernetes.kubeconfig)
+...
+```
+
+The remembered context (kube context/namespace + facts, non-secret) is injected into the model
+prompt and used to construct commands.
+
 ## Roadmap
 
 - **Phase 1 · MVP (current)** — Intent Bridge, on-device engine (OpenAI-compatible), K8s skill,

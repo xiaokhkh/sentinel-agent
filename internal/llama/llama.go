@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/xiaokhkh/sentinel-agent/internal/memory"
 )
 
 const (
@@ -100,6 +102,7 @@ func RunForeground(model, baseURL string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	applyHFEndpoint(cmd)
 	return cmd.Run()
 }
 
@@ -134,6 +137,7 @@ func EnsureServer(model, baseURL string, timeout time.Duration) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	applyHFEndpoint(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start llama-server: %w", err)
 	}
@@ -212,4 +216,15 @@ func signalStop(pid int) error {
 		return groupErr
 	}
 	return nil
+}
+
+func applyHFEndpoint(cmd *exec.Cmd) {
+	if _, ok := os.LookupEnv("HF_ENDPOINT"); ok {
+		return
+	}
+	store, err := memory.Load()
+	if err != nil || store.Runtime.HFEndpoint == "" {
+		return
+	}
+	cmd.Env = append(os.Environ(), "HF_ENDPOINT="+store.Runtime.HFEndpoint)
 }

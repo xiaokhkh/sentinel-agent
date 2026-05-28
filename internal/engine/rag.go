@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/xiaokhkh/sentinel-agent/internal/memory"
 )
 
 // LocalContext is the local-RAG background the engine reads to ground its
@@ -16,6 +18,8 @@ type LocalContext struct {
 	Hostname       string
 	KubeConfigPath string
 	KubeContext    string
+	Namespace      string
+	Facts          []string
 	HasKubeConfig  bool
 	SSHConfigPath  string
 	HasSSHConfig   bool
@@ -26,17 +30,37 @@ type LocalContext struct {
 func LoadLocalContext() *LocalContext {
 	lc := &LocalContext{}
 	lc.Hostname, _ = os.Hostname()
+	lc.Namespace = "default"
+
+	store, _ := memory.Load()
+	if store != nil {
+		if store.Kubernetes.Kubeconfig != "" {
+			lc.HasKubeConfig = true
+			lc.KubeConfigPath = store.Kubernetes.Kubeconfig
+		}
+		if store.Kubernetes.Context != "" {
+			lc.KubeContext = store.Kubernetes.Context
+		}
+		if store.Kubernetes.Namespace != "" {
+			lc.Namespace = store.Kubernetes.Namespace
+		}
+		lc.Facts = append(lc.Facts, store.Facts...)
+	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return lc
 	}
 
-	kube := filepath.Join(home, ".kube", "config")
-	if fi, err := os.Stat(kube); err == nil && !fi.IsDir() {
-		lc.HasKubeConfig = true
-		lc.KubeConfigPath = kube
-		lc.KubeContext = currentKubeContext(kube)
+	if !lc.HasKubeConfig {
+		kube := filepath.Join(home, ".kube", "config")
+		if fi, err := os.Stat(kube); err == nil && !fi.IsDir() {
+			lc.HasKubeConfig = true
+			lc.KubeConfigPath = kube
+		}
+	}
+	if lc.HasKubeConfig && lc.KubeContext == "" {
+		lc.KubeContext = currentKubeContext(lc.KubeConfigPath)
 	}
 
 	ssh := filepath.Join(home, ".ssh", "config")
@@ -53,12 +77,15 @@ func (lc *LocalContext) Summary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "host=%s; ", lc.Hostname)
 	if lc.HasKubeConfig {
-		fmt.Fprintf(&b, "kubeconfig present (current-context=%s); ", lc.KubeContext)
+		fmt.Fprintf(&b, "kubeconfig present (current-context=%s, namespace=%s); ", lc.KubeContext, lc.Namespace)
 	} else {
-		b.WriteString("no kubeconfig; ")
+		fmt.Fprintf(&b, "no kubeconfig (namespace=%s); ", lc.Namespace)
 	}
 	if lc.HasSSHConfig {
 		b.WriteString("ssh config present; ")
+	}
+	if len(lc.Facts) > 0 {
+		fmt.Fprintf(&b, "memory=%s; ", strings.Join(lc.Facts, " | "))
 	}
 	return strings.TrimSpace(b.String())
 }

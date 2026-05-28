@@ -146,6 +146,14 @@ func (s *Server) toolRunTask(args json.RawMessage) map[string]any {
 		// protocol errors: the cloud client must NOT retry off-device.
 		return toolText(fmt.Sprintf("no plan produced (%v). Per Sentinel's privacy policy the task was not escalated off-device.", err))
 	}
+	if plan.NeedsInput != nil {
+		return toolJSON(map[string]any{
+			"status": "needs_input",
+			"prompt": plan.NeedsInput.Prompt,
+			"key":    plan.NeedsInput.Key,
+			"note":   "answer via guard config set or include it and call run_task again",
+		})
+	}
 
 	type screened struct {
 		Kind        string `json:"kind"`
@@ -241,7 +249,9 @@ func (s *Server) toolLocalContext() map[string]any {
 		"hostname":       rag.Hostname,
 		"has_kubeconfig": rag.HasKubeConfig,
 		"kube_context":   rag.KubeContext,
+		"namespace":      rag.Namespace,
 		"has_ssh_config": rag.HasSSHConfig,
+		"memory":         rag.Facts,
 		"note":           "non-secret summary only; file contents and credentials are never exposed",
 	})
 }

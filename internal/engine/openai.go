@@ -39,6 +39,9 @@ Convert the user's natural-language task into a minimal sequence of concrete she
 Rules:
 - Output ONLY a single JSON object. No prose, no markdown code fences.
 - Schema: {"actions":[{"kind":"kubectl"|"shell","command":"<one command>","explanation":"<short why>"}]}
+- You are given the agent's local context/memory. If the task requires access details that are MISSING from it and you cannot proceed safely (for example you need a kubeconfig path / context / namespace, or a connection target, but none is provided), DO NOT guess or fabricate them.
+- In that case return ONLY: {"needs_input":{"prompt":"<one clear question to ask the user>","key":"<dotted config key to save the answer, e.g. kubernetes.kubeconfig, or empty string>"}}
+- Otherwise return the actions object as before.
 - Prefer read-only/diagnostic commands. Never add destructive flags (--all, --force, drop, truncate, delete) unless the user explicitly requested them.
 - Exactly one command per action. Do not chain commands with && or ;.
 - If the task cannot be mapped to safe local commands, return {"actions":[]}.`
@@ -125,10 +128,16 @@ func parsePlan(raw, source, task string) (*Plan, error) {
 	}
 
 	var parsed struct {
-		Actions []Action `json:"actions"`
+		Actions    []Action       `json:"actions"`
+		NeedsInput *Clarification `json:"needs_input"`
 	}
 	if err := json.Unmarshal([]byte(raw[start:end+1]), &parsed); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrIntentDowngrade, err)
+	}
+	if parsed.NeedsInput != nil && strings.TrimSpace(parsed.NeedsInput.Prompt) != "" {
+		parsed.NeedsInput.Prompt = strings.TrimSpace(parsed.NeedsInput.Prompt)
+		parsed.NeedsInput.Key = strings.TrimSpace(parsed.NeedsInput.Key)
+		return &Plan{Task: task, Source: source, NeedsInput: parsed.NeedsInput}, nil
 	}
 	if len(parsed.Actions) == 0 {
 		return nil, ErrIntentDowngrade

@@ -156,6 +156,31 @@ go build -o bin/guard ./cmd/guard
 - **意图降级**：本地模型给不出计划时，**绝不**把原始任务静默升级到云端，而是把降级显式抛给你/客户端。
 - **本地 RAG 不外泄**：只把 `current-context` 等非密钥标识注入提示词，凭证与文件内容从不读取或外传。
 
+## 结构化记忆
+
+`guard` 在 `~/.sentinel/config.json` 里记住「如何访问你的系统」——**只存路径、引用与事实，绝不存密钥**：
+
+```bash
+guard config set kubernetes.kubeconfig ~/.kube/config
+guard config set kubernetes.namespace payments
+guard remember "payment service runs in namespace payments"
+guard config        # 查看
+guard memory        # 列出记住的事实
+```
+
+当任务需要的访问信息还没有（例如没有 kubeconfig）时，**系统提示词**会让模型在对话里向你索取，而不是瞎猜——
+答案会被保存下来供下次使用：
+
+```
+$ guard run "check my k8s pods"
+Which kubeconfig should I use?
+> ~/.kube/config
+saved to ~/.sentinel/config.json (kubernetes.kubeconfig)
+...
+```
+
+记住的上下文（kube context/namespace + facts，均非密钥）会注入模型提示词并用于构造命令。
+
 ## Roadmap
 
 - **第一阶段 · MVP（当前）**：意图桥、端侧推理（OpenAI 兼容）、K8s 技能包、Policy Guard、MCP 服务。

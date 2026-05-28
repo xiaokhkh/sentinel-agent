@@ -65,3 +65,22 @@ func TestParsePlanDowngradeOnGarbage(t *testing.T) {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
 }
+
+func TestParsePlanNeedsInput(t *testing.T) {
+	plan, err := parsePlan(`{"needs_input":{"prompt":"Which kubeconfig should I use?","key":"kubernetes.kubeconfig"}}`, "test", "check pods")
+	if err != nil {
+		t.Fatalf("parsePlan needs_input: %v", err)
+	}
+	if plan.NeedsInput == nil {
+		t.Fatal("NeedsInput is nil")
+	}
+	if plan.NeedsInput.Prompt != "Which kubeconfig should I use?" {
+		t.Fatalf("prompt = %q", plan.NeedsInput.Prompt)
+	}
+	if plan.NeedsInput.Key != "kubernetes.kubeconfig" {
+		t.Fatalf("key = %q", plan.NeedsInput.Key)
+	}
+	if len(plan.Actions) != 0 {
+		t.Fatalf("actions = %#v; want none", plan.Actions)
+	}
+}
