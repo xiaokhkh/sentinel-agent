@@ -29,12 +29,21 @@
 
 ## 演示
 
+**CLI** —— 自然语言 → 端侧 LFM2.5 → Policy Guard → 对真实 minikube 集群执行 `kubectl`
+（`ImagePullBackOff` 那个坏 pod 是真的）；破坏性命令一律拒绝。
+
 <p align="center">
-  <img src="docs/assets/demo.gif" width="760" alt="guard 诊断真实 minikube 集群">
+  <img src="docs/assets/demo-cli.gif" width="760" alt="guard CLI 对接真实 minikube 集群">
 </p>
 
-自然语言任务 → 端侧 LFM2.5 → Policy Guard → 对真实 minikube 集群执行 `kubectl`；破坏性命令一律拒绝。
-（[如何复现](docs/demo.tape)）
+**Sentinel Skill** —— 云端 Agent 通过 `guard skill` 获得一个安全的本地运维能力：端侧规划、
+只读命令回传脱敏 JSON、破坏性命令被拦截。
+
+<p align="center">
+  <img src="docs/assets/demo-skill.gif" width="760" alt="Sentinel Skill 使用本地受控执行">
+</p>
+
+<sub>复现：<a href="docs/demo-cli.sh">docs/demo-cli.sh</a> · <a href="docs/demo-skill.sh">docs/demo-skill.sh</a>（asciinema + agg 录制）</sub>
 
 ## 安装（macOS 优先）
 
@@ -93,17 +102,17 @@ go build -o bin/guard ./cmd/guard
 | confirm（变更）     | 询问       | 执行   | 执行   |
 | block（危险）       | 拒绝       | 拒绝   | 执行 ⚠ |
 
-### 模式二 —— MCP 服务（云端编排 + 端侧安全执行）
+### 模式二 —— Sentinel Skill（云端 Agent + 端侧安全执行）
 
-运行 `guard mcp`，在任意 MCP 客户端（Claude Desktop、Cursor、Codex…）里注册它。
-**端侧模型作为云端模型的 skill/tool**：云端做高层规划，Sentinel 在本机执行具体步骤、对输出**脱敏**后回传，
-云端据此推理而永远看不到原始密钥。
+把 Sentinel Skill 安装到云端 Agent（Claude、Codex、Cursor…）里。Skill 给 Agent 一个安全的本地运维能力：
+云端做高层规划，Sentinel 在本机执行具体步骤、对输出**脱敏**后回传，云端据此推理而永远看不到原始密钥。
+Skill 通过本机 `guard skill` CLI JSON 接口与本地运行时通信。
 
 ```
  云端大模型(规划者) — Claude Desktop / Cursor / Codex
-        │  run_task / execute_step("kubectl logs ...")   ← 只有意图离开本机
+        │  guard skill plan / exec("kubectl logs ...")   ← 只有意图离开本机
         ▼
-   guard mcp   (本机 = 执行者 + 脱敏器)
+   Sentinel 本地运行时   (本机 = 执行者 + 脱敏器)
    ├─ LFM Engine   → 端侧模型规划 / 细化
    ├─ Local RAG    → 读取 kube/ssh 上下文      (绝不外传)
    ├─ Policy Guard → allow / confirm / block  ×  mode (plan/readonly/auto/full)
@@ -115,25 +124,19 @@ go build -o bin/guard ./cmd/guard
 
 这就是**合规的出口**：强模型留在云端，特权操作与原始数据留在本机，只有脱敏后的观测结果跨越边界。
 
-注册方式（Claude Desktop / 通用 MCP 客户端的 `mcpServers` 配置）：
+把 Skill 接到本地运行时：让 Agent 所在机器能执行 `guard`。
 
-```jsonc
-{
-  "mcpServers": {
-    "sentinel-agent": {
-      "command": "guard",
-      "args": ["mcp"],
-      "env": { "SENTINEL_PROVIDER": "ollama", "SENTINEL_MODEL": "lfm2.5" }
-    }
-  }
-}
+```bash
+go install github.com/xiaokhkh/sentinel-agent/cmd/guard@latest
+guard skill context
 ```
 
-或用 Codex：`codex mcp add sentinel-agent -- guard mcp`
+Skill 包：[docs/skills/sentinel-agent/SKILL.md](docs/skills/sentinel-agent/SKILL.md)。
+它是 Agent 侧契约：什么时候看本地上下文、什么时候规划、什么时候执行、什么时候停下来等审批。
 
-通过 MCP 暴露的工具：`run_task`（本地规划任务）、`execute_step`（在围栏+模式下执行单条命令，回传**脱敏**输出）、
-`policy_check`、`local_context`、`list_skills`。服务自治级别由 `SENTINEL_MODE` 决定（默认 `readonly`）；
-对 `ask` 级（变更类）步骤，MCP 客户端自身的工具调用审批弹窗即人工门。
+Skill 使用的 CLI 调用：`guard skill context`、`guard skill plan`、`guard skill exec`、
+`guard skill policy`。Skill 运行时自治级别由 `SENTINEL_MODE` 决定（默认 `readonly`）；
+对 `ask` 级（变更类）步骤，Agent 客户端自身的工具调用审批弹窗即人工门。
 
 ## 架构与流程
 
@@ -161,8 +164,11 @@ go build -o bin/guard ./cmd/guard
 
 ## 安全模型
 
+- **端侧安全边界**：云端 Agent 可以做规划，但敏感数据不得持久化、传输或静默升级到云端。
+  kubeconfig 原文、SSH key、云厂商 token、数据库凭证、私有源码、未脱敏生产输出都必须留在本机。
+  详见 [docs/on-device-security.md](docs/on-device-security.md)。
 - **Policy Guard**：每条指令执行前都被分级 `allow` / `confirm` / `block`；未命中任何规则默认 `confirm`——未知动作永远需要人确认。
-- **权限分级**：Claude Code / Codex 式的 `--mode`（`readonly`/`auto`/`full`）与判定组合决定 执行/询问/拒绝。CLI 与 MCP 默认均为 `readonly`：只读执行、变更询问、危险拒绝。
+- **权限分级**：Claude Code / Codex 式的 `--mode`（`readonly`/`auto`/`full`）与判定组合决定 执行/询问/拒绝。CLI 与 Skill 默认均为 `readonly`：只读执行、变更询问、危险拒绝。
 - **脱敏（desensitization）**：任何可能离开本机的执行输出先经脱敏——私钥、JWT、云厂商 key、kubeconfig 密钥、URL 里的凭证、邮箱、长 base64 块统统抹去。在云端规划 loop 下，隐私承诺是**"只出脱敏数据"**，而 Redactor 就是这条保证的命门。
 - **意图降级**：本地模型给不出计划时，**绝不**把原始任务静默升级到云端，而是把降级显式抛给你/客户端。
 - **本地 RAG 不外泄**：只把 `current-context` 等非密钥标识注入提示词，凭证与文件内容从不读取或外传。
@@ -194,7 +200,7 @@ saved to ~/.sentinel/config.json (kubernetes.kubeconfig)
 
 ## Roadmap
 
-- **第一阶段 · MVP（当前）**：意图桥、端侧推理（OpenAI 兼容）、K8s 技能包、Policy Guard、MCP 服务。
+- **第一阶段 · MVP（当前）**：意图桥、端侧推理（OpenAI 兼容）、K8s 技能包、Policy Guard、Sentinel Skill。
 - **第二阶段 · 技能生态**：Database（MySQL/PG）、Cloud CLI（AWS/Aliyun）、Git；完善意图降级。
 - **第三阶段 · 企业级合规**：SSO、审计日志（仅上报操作类型不报数据）、离线模式。
 

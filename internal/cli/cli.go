@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	osexec "os/exec"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/xiaokhkh/sentinel-agent/internal/memory"
 	"github.com/xiaokhkh/sentinel-agent/internal/permission"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
+	"github.com/xiaokhkh/sentinel-agent/internal/redact"
 	"github.com/xiaokhkh/sentinel-agent/internal/skills"
 
 	// Register capability packs for `guard skills`.
@@ -44,6 +46,8 @@ func Run(args []string) int {
 		return cmdRun(args[1:])
 	case "policy":
 		return cmdPolicy(args[1:])
+	case "skill":
+		return cmdSkill(args[1:])
 	case "skills":
 		return cmdSkills()
 	case "context":
@@ -300,6 +304,245 @@ func cmdPolicy(args []string) int {
 	return 0
 }
 
+const skillMaxOutputBytes = 8000
+
+func cmdSkill(args []string) int {
+	if len(args) < 1 {
+		printSkillUsage(os.Stderr)
+		return 2
+	}
+	switch args[0] {
+	case "context":
+		return cmdSkillContext()
+	case "plan":
+		return cmdSkillPlan(args[1:])
+	case "exec":
+		return cmdSkillExec(args[1:])
+	case "policy":
+		return cmdSkillPolicy(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown skill command %q\n\n", args[0])
+		printSkillUsage(os.Stderr)
+		return 2
+	}
+}
+
+func cmdSkillContext() int {
+	rag := engine.LoadLocalContext()
+	return writeJSON(map[string]any{
+		"hostname":       rag.Hostname,
+		"has_kubeconfig": rag.HasKubeConfig,
+		"kube_context":   rag.KubeContext,
+		"namespace":      rag.Namespace,
+		"has_ssh_config": rag.HasSSHConfig,
+		"memory":         append([]string{}, rag.Facts...),
+		"note":           "non-secret summary only; file contents and credentials are never exposed",
+	})
+}
+
+func cmdSkillPlan(args []string) int {
+	fs := flag.NewFlagSet("skill plan", flag.ContinueOnError)
+	cfg := config.Load()
+	provider := fs.String("provider", cfg.Provider, "inference provider: mock|ollama|llamacpp|mlx")
+	baseURL := fs.String("base-url", cfg.BaseURL, "OpenAI-compatible endpoint base URL")
+	model := fs.String("model", cfg.Model, "model name/tag")
+	mode := fs.String("mode", cfg.Mode, "execution mode: readonly|auto|full")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	task := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if task == "" {
+		fmt.Fprintln(os.Stderr, `usage: guard skill plan [flags] "<natural language task>"`)
+		return 2
+	}
+
+	pmode, ok := permission.ParseMode(*mode)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "error: unknown mode %q (readonly|auto|full)\n", *mode)
+		return 2
+	}
+
+	if isLlamaCppProvider(*provider) {
+		if err := llama.EnsureServer(*model, *baseURL, 5*time.Minute); err != nil {
+			writeJSON(map[string]any{"status": "error", "error": err.Error()})
+			return 1
+		}
+	}
+
+	inf, err := engine.NewProvider(engine.ProviderConfig{
+		Name:    *provider,
+		BaseURL: *baseURL,
+		Model:   *model,
+		APIKey:  cfg.APIKey,
+		Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		writeJSON(map[string]any{"status": "error", "error": err.Error()})
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout+5*time.Second)
+	plan, err := inf.Plan(ctx, task, engine.LoadLocalContext())
+	cancel()
+	if errors.Is(err, engine.ErrIntentDowngrade) {
+		writeJSON(map[string]any{
+			"status": "no_plan",
+			"error":  err.Error(),
+			"note":   "per Sentinel policy, the raw task was not escalated off-device",
+		})
+		return 3
+	}
+	if err != nil {
+		writeJSON(map[string]any{"status": "error", "error": err.Error()})
+		return 1
+	}
+	if plan.NeedsInput != nil {
+		return writeJSON(map[string]any{
+			"status": "needs_input",
+			"prompt": plan.NeedsInput.Prompt,
+			"key":    plan.NeedsInput.Key,
+			"note":   "answer via guard config set or include it and call guard skill plan again",
+		})
+	}
+
+	type screened struct {
+		Kind        string `json:"kind"`
+		Command     string `json:"command"`
+		Explanation string `json:"explanation"`
+		Decision    string `json:"decision"`
+		Risk        string `json:"risk"`
+		Rule        string `json:"rule"`
+		Outcome     string `json:"outcome_under_mode"`
+	}
+	out := struct {
+		Status   string     `json:"status"`
+		Task     string     `json:"task"`
+		Provider string     `json:"provider"`
+		Mode     string     `json:"mode"`
+		Actions  []screened `json:"actions"`
+		Note     string     `json:"note"`
+	}{
+		Status:   "planned",
+		Task:     task,
+		Provider: inf.Name(),
+		Mode:     string(pmode),
+		Note:     "run read-only actions with guard skill exec; mutating actions require approval",
+	}
+
+	guard := policy.New()
+	for _, ac := range plan.Actions {
+		v := guard.Evaluate(ac.Command)
+		out.Actions = append(out.Actions, screened{
+			Kind:        string(ac.Kind),
+			Command:     redact.Redact(ac.Command),
+			Explanation: ac.Explanation,
+			Decision:    string(v.Decision),
+			Risk:        string(v.Risk),
+			Rule:        v.Rule,
+			Outcome:     string(permission.Decide(v.Decision, pmode)),
+		})
+	}
+	return writeJSON(out)
+}
+
+func cmdSkillExec(args []string) int {
+	fs := flag.NewFlagSet("skill exec", flag.ContinueOnError)
+	cfg := config.Load()
+	mode := fs.String("mode", cfg.Mode, "execution mode: readonly|auto|full")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	command := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if command == "" {
+		fmt.Fprintln(os.Stderr, `usage: guard skill exec [--mode readonly|auto|full] "<command>"`)
+		return 2
+	}
+
+	pmode, ok := permission.ParseMode(*mode)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "error: unknown mode %q (readonly|auto|full)\n", *mode)
+		return 2
+	}
+
+	v := policy.New().Evaluate(command)
+	res := map[string]any{
+		"command":  redact.Redact(command),
+		"decision": v.Decision,
+		"risk":     v.Risk,
+		"rule":     v.Rule,
+		"mode":     pmode,
+	}
+
+	switch permission.Decide(v.Decision, pmode) {
+	case permission.Refuse:
+		res["status"] = "refused"
+		res["reason"] = "blocked by policy: " + v.Reason
+		writeJSON(res)
+		return 1
+	case permission.Ask:
+		res["status"] = "approval_required"
+		res["reason"] = "mutating command not auto-executed; ask the user or run it locally with explicit approval"
+		writeJSON(res)
+		return 2
+	case permission.Run:
+		out, err := osexec.Command("sh", "-c", command).CombinedOutput()
+		text := string(out)
+		if len(text) > skillMaxOutputBytes {
+			text = text[:skillMaxOutputBytes] + "\n...[truncated]"
+		}
+		res["status"] = "executed"
+		res["output"] = redact.Redact(text)
+		if err != nil {
+			res["error"] = err.Error()
+			writeJSON(res)
+			return 1
+		}
+		return writeJSON(res)
+	default:
+		res["status"] = "error"
+		res["reason"] = "unknown permission outcome"
+		writeJSON(res)
+		return 1
+	}
+}
+
+func cmdSkillPolicy(args []string) int {
+	command := strings.TrimSpace(strings.Join(args, " "))
+	if command == "" {
+		fmt.Fprintln(os.Stderr, `usage: guard skill policy "<command>"`)
+		return 2
+	}
+	v := policy.New().Evaluate(command)
+	return writeJSON(map[string]any{
+		"command":  redact.Redact(command),
+		"decision": v.Decision,
+		"risk":     v.Risk,
+		"rule":     v.Rule,
+		"reason":   v.Reason,
+	})
+}
+
+func writeJSON(v any) int {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		fmt.Fprintln(os.Stderr, "json encode error:", err)
+		return 1
+	}
+	return 0
+}
+
+func printSkillUsage(w io.Writer) {
+	fmt.Fprint(w, `usage:
+  guard skill context                         print non-secret local context as JSON
+  guard skill plan [flags] "<task>"           plan locally and return screened JSON actions
+  guard skill exec [flags] "<command>"        run one allowed command and return redacted JSON output
+  guard skill policy "<command>"              classify one command as JSON
+
+`)
+}
+
 func cmdSkills() int {
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "SKILL\tSTATUS\tDESCRIPTION")
@@ -417,6 +660,7 @@ func printUsage(w *os.File) {
 usage:
   guard run [flags] "<natural language task>"   plan (and optionally run) an ops task
   guard policy check "<command>"                test a command against the Policy Guard
+  guard skill <context|plan|exec|policy>        JSON interface for Sentinel Skill agents
   guard skills                                  list available capability packs
   guard context                                 show local RAG context (no secrets)
   guard config                                  show structured memory config
@@ -428,7 +672,7 @@ usage:
   guard stop                                    stop the background llama-server
   guard model                                   show local model/bootstrap status
   guard model pull                              warm the local llama.cpp model cache
-  guard mcp                                     run as an MCP server (stdio) for cloud LLM clients
+  guard mcp                                     run the optional MCP stdio adapter
   guard version                                 print version
 
 run flags:
