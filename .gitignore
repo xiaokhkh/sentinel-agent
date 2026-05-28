@@ -1,0 +1,21 @@
+# build output
+/bin/
+
+# model weights (never commit; bring your own)
+*.gguf
+*.safetensors
+*.bin
+models/
+
+# local env & secrets
+.env
+
+# go
+coverage.out
+*.test
+
+# macOS
+.DS_Store
+
+# logs
+*.log
