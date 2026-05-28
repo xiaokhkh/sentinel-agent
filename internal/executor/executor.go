@@ -11,8 +11,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/xiaokhkh/sentinel/internal/engine"
-	"github.com/xiaokhkh/sentinel/internal/policy"
+	"github.com/xiaokhkh/sentinel-agent/internal/engine"
+	"github.com/xiaokhkh/sentinel-agent/internal/policy"
 )
 
 // Executor runs the actions of a plan.

@@ -7,7 +7,7 @@ package main
 import (
 	"os"
 
-	"github.com/xiaokhkh/sentinel/internal/cli"
+	"github.com/xiaokhkh/sentinel-agent/internal/cli"
 )
 
 func main() {

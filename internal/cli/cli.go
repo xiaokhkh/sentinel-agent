@@ -13,14 +13,14 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/xiaokhkh/sentinel/internal/config"
-	"github.com/xiaokhkh/sentinel/internal/engine"
-	"github.com/xiaokhkh/sentinel/internal/executor"
-	"github.com/xiaokhkh/sentinel/internal/policy"
-	"github.com/xiaokhkh/sentinel/internal/skills"
+	"github.com/xiaokhkh/sentinel-agent/internal/config"
+	"github.com/xiaokhkh/sentinel-agent/internal/engine"
+	"github.com/xiaokhkh/sentinel-agent/internal/executor"
+	"github.com/xiaokhkh/sentinel-agent/internal/policy"
+	"github.com/xiaokhkh/sentinel-agent/internal/skills"
 
 	// Register capability packs for `guard skills`.
-	_ "github.com/xiaokhkh/sentinel/internal/skills/k8s"
+	_ "github.com/xiaokhkh/sentinel-agent/internal/skills/k8s"
 )
 
 // Version is the CLI version.

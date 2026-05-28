@@ -2,7 +2,7 @@
 // registers the skill with the global registry.
 package k8s
 
-import "github.com/xiaokhkh/sentinel/internal/skills"
+import "github.com/xiaokhkh/sentinel-agent/internal/skills"
 
 func init() {
 	skills.Register(skills.Skill{
