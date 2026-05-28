@@ -16,6 +16,7 @@ import (
 	"github.com/xiaokhkh/sentinel-agent/internal/config"
 	"github.com/xiaokhkh/sentinel-agent/internal/engine"
 	"github.com/xiaokhkh/sentinel-agent/internal/executor"
+	"github.com/xiaokhkh/sentinel-agent/internal/mcp"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
 	"github.com/xiaokhkh/sentinel-agent/internal/skills"
 
@@ -41,6 +42,8 @@ func Run(args []string) int {
 		return cmdSkills()
 	case "context":
 		return cmdContext()
+	case "mcp":
+		return cmdMCP()
 	case "version", "--version", "-v":
 		fmt.Printf("sentinel (guard) %s\n", Version)
 		return 0
@@ -175,6 +178,14 @@ func cmdContext() int {
 	return 0
 }
 
+func cmdMCP() int {
+	if err := mcp.NewServer(os.Stdin, os.Stdout, config.Load()).Serve(); err != nil {
+		fmt.Fprintln(os.Stderr, "mcp server error:", err)
+		return 1
+	}
+	return 0
+}
+
 func printUsage(w *os.File) {
 	fmt.Fprint(w, `Sentinel (guard) — on-device secure execution layer
 
@@ -183,6 +194,7 @@ usage:
   guard policy check "<command>"                test a command against the Policy Guard
   guard skills                                  list available capability packs
   guard context                                 show local RAG context (no secrets)
+  guard mcp                                     run as an MCP server (stdio) for cloud LLM clients
   guard version                                 print version
 
 run flags:

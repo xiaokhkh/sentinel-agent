@@ -59,7 +59,15 @@ internal/cli         子命令分发（意图接口层）
 internal/engine      推理核心、RAG、provider 抽象（端侧推理芯）
 internal/policy      Policy Guard 规则与判定（安全执行围栏）
 internal/executor    Human-in-the-loop 执行器
+internal/mcp         MCP stdio 服务（云端编排 + 端侧安全执行）
 internal/skills      技能包注册表
 internal/skills/k8s  Kubernetes 技能包
 internal/config      env + 默认值配置
 ```
+
+## 两种使用形态
+
+- **CLI**：人在终端直接 `guard run`，完全本地、含 Human-in-the-loop 执行。
+- **MCP 服务**（`guard mcp`）：以 stdio JSON-RPC 暴露 `run_task` / `policy_check` /
+  `local_context` / `list_skills`。云端大模型作为客户端下发意图，端侧完成「规划 + 审查」，
+  只回传审查后的计划；本地凭证与配置不出域。`run_task` 刻意只规划不执行。

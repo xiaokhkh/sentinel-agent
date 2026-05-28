@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Sentinel-Agent">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0d1626"/>
+      <stop offset="1" stop-color="#0a1120"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+
+  <!-- shield: security / guard -->
+  <path d="M128 18 L210 50 V118 C210 174 171 212 128 238 C85 212 46 174 46 118 V50 Z"
+        fill="url(#bg)" stroke="url(#edge)" stroke-width="6" stroke-linejoin="round"/>
+  <!-- faint top sheen -->
+  <path d="M128 26 L202 55 V96 C202 70 168 44 128 32 Z" fill="#ffffff" opacity="0.05"/>
+
+  <!-- circuit traces + nodes: on-device / edge / chip -->
+  <g stroke="#27496b" stroke-width="4" fill="none" stroke-linecap="round">
+    <path d="M70 96 H92"/>
+    <path d="M70 132 H88"/>
+    <path d="M186 96 H164"/>
+    <path d="M186 132 H168"/>
+  </g>
+  <g fill="#2dd4bf">
+    <circle cx="68" cy="96" r="4.5"/>
+    <circle cx="68" cy="132" r="4.5"/>
+    <circle cx="188" cy="96" r="4.5"/>
+    <circle cx="188" cy="132" r="4.5"/>
+  </g>
+
+  <!-- terminal prompt ">_": on-device CLI agent -->
+  <path d="M104 104 L128 126 L104 148" fill="none" stroke="url(#edge)" stroke-width="10"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="134" y="139" width="24" height="9" rx="3" fill="#22d3ee"/>
+</svg>

@@ -1,144 +1,162 @@
-# Sentinel · Guard-AGENT
+<p align="center">
+  <img src="docs/assets/logo.svg" width="180" alt="Sentinel-Agent logo">
+</p>
 
-![go](https://img.shields.io/badge/go-1.24-00ADD8)
-![license](https://img.shields.io/badge/license-MIT-green)
-![status](https://img.shields.io/badge/status-alpha-orange)
+<h1 align="center">Sentinel-Agent</h1>
 
-> AI 时代的**安全隔离执行层**。把端侧模型（LFM 2.5）封装成标准化 CLI，
-> 解决云端大模型处理私有基础设施（K8s / DB / Cloud API）时
-> 「高能力」与「高隐私」无法兼得的矛盾。
+<p align="center">
+  The on-device AI ops agent — a <b>secure isolation execution layer</b> between cloud LLMs and your private infrastructure.
+</p>
 
-`guard run "<自然语言任务>"` —— 本地模型把模糊意图翻译成具体指令，
-经过安全围栏校验，再由你确认后执行。**敏感数据在物理意义上不出域。**
+<p align="center">
+  <img src="https://img.shields.io/badge/go-1.24-00ADD8" alt="go">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="license">
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="status">
+  <img src="https://img.shields.io/badge/deps-stdlib%20only-blue" alt="deps">
+</p>
 
----
-
-## 三层过滤架构
-
-```
-            guard run "诊断 default 里未就绪的 pod"
-                          │
-        ┌─────────────────▼──────────────────┐
-        │  ① 意图接口层 (Intent Bridge)        │   暴露自然语言入口
-        └─────────────────┬──────────────────┘
-                          │
-        ┌─────────────────▼──────────────────┐
-        │  ② 端侧推理芯 (LFM Engine)           │   本地推理，数据不出域
-        │   • Local RAG：读取 .kube/.ssh 配置  │
-        │   • 意图对齐：意图 → shell/kubectl    │
-        │   • Provider：ollama│llamacpp│mlx│mock│
-        └─────────────────┬──────────────────┘
-                          │  Plan (JSON actions)
-        ┌─────────────────▼──────────────────┐
-        │  ③ 安全执行围栏 (Policy Guard)        │   allow / confirm / block
-        │   • 正则 + 语义拦截（drop / --all …） │
-        │   • Human-in-the-loop 确认           │
-        └─────────────────┬──────────────────┘
-                          │
-                     执行 / 拒绝 / 降级
-```
-
-设计上**推理后端与编排层解耦**：所有模型后端都走 OpenAI 兼容协议，
-换后端只是改配置而非改代码（对应立项书风险评估里的「标准化协议层解耦」）。
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
 ---
 
-## 快速开始
+`guard run "<natural-language task>"` — a local model translates a fuzzy intent into concrete
+commands, the Policy Guard screens them, and you confirm before anything runs.
+**Sensitive data physically never leaves the machine.**
+
+Modern cloud LLMs are powerful but teams increasingly forbid pasting Kubernetes configs,
+private code, or DB credentials into them. Sentinel-Agent is the **compliant exit**: keep the
+high-level reasoning wherever you like, but let an on-device model do the privileged work behind
+a security fence.
+
+## How you use it
+
+Two modes, same core. Pick per situation.
+
+### Mode 1 — CLI (standalone, fully local)
+
+Talk to it directly in your terminal. Best for interactive ops, scripts, and air-gapped boxes.
 
 ```bash
-# 构建
 go build -o bin/guard ./cmd/guard
 
-# 1) 无需任何模型，用 mock 后端体验完整流程
-./bin/guard run --provider mock "诊断 default 命名空间里未就绪的 pod"
+# no model needed — the mock backend runs the whole pipeline offline
+./bin/guard run --provider mock "diagnose not-ready pods in the default namespace"
 
-# 2) 单独测试安全围栏
+# screen a single command against the security fence
 ./bin/guard policy check "kubectl delete pods --all"   # -> BLOCK
-./bin/guard policy check "kubectl get pods"            # -> ALLOW
 
-# 3) 查看本地上下文（不含任何密钥）
-./bin/guard context
-
-# 4) 列出技能包
-./bin/guard skills
+# plan only by default; add --execute to actually run (with confirmation)
+./bin/guard run --execute "restart the nginx deployment"
 ```
 
-默认是 **plan 模式**（只打印计划、不执行）。确认无误后加 `--execute` 才会真正运行，
-且 `block` 级指令永远不会被执行、`confirm` 级指令会逐条要求确认。
+### Mode 2 — MCP server (cloud orchestrator + on-device safe execution)
 
-### 接入真实模型（推荐 Ollama）
+Run `guard mcp` and register it in any MCP client (Claude Desktop, Cursor, Codex, ...).
+The cloud model delegates an intent; the **on-device** model plans it, the Policy Guard screens
+it, and only the screened plan comes back. Your kube/ssh config and secrets never travel.
 
-```bash
-# 拉起一个 OpenAI 兼容的本地推理服务，例如 Ollama
-ollama serve
-ollama pull <你的-lfm2.5-tag>
-
-export SENTINEL_PROVIDER=ollama
-export SENTINEL_MODEL=<你的-lfm2.5-tag>
-./bin/guard run "查看 payment 服务最近的日志"
+```
+ Cloud LLM (Claude Desktop / Cursor / Codex)
+        │  run_task("diagnose ...")        ← only the intent leaves
+        ▼
+   guard mcp   (this machine)
+   ├─ LFM Engine   → plan with the local model
+   ├─ Local RAG    → reads kube/ssh context  (never sent out)
+   └─ Policy Guard → allow / confirm / block
+        │  screened plan only              → returned to the cloud client
+        ▼
+   you run it with `guard run --execute`   (human in the loop)
 ```
 
-> 模型权重不随仓库分发，需自行准备。`*.gguf` / `*.safetensors` / `models/` 已被 gitignore。
+Register it (Claude Desktop / generic MCP client `mcpServers` entry):
 
----
+```jsonc
+{
+  "mcpServers": {
+    "sentinel-agent": {
+      "command": "guard",
+      "args": ["mcp"],
+      "env": { "SENTINEL_PROVIDER": "ollama", "SENTINEL_MODEL": "lfm2.5" }
+    }
+  }
+}
+```
 
-## 推理后端
+Or with Codex: `codex mcp add sentinel-agent -- guard mcp`
 
-所有后端统一走 OpenAI 兼容的 `/v1/chat/completions`，通过 `--provider` 或 `SENTINEL_PROVIDER` 切换。
+Tools exposed over MCP: `run_task`, `policy_check`, `local_context`, `list_skills`.
+`run_task` is **plan-only** — execution stays with the human-driven CLI on purpose.
 
-| provider   | 跨平台 | 说明                                                | 默认 endpoint                 |
-|------------|--------|-----------------------------------------------------|-------------------------------|
-| `ollama`   | 全平台 | **推荐默认**：自带模型管理、安装简单                 | `http://localhost:11434/v1`   |
-| `llamacpp` | 全平台 | 单二进制、无守护进程、可审计（GGUF）                | `http://localhost:8080/v1`    |
-| `mlx`      | 仅 Mac | Apple Silicon 上性能最佳                            | `http://localhost:8080/v1`    |
-| `mock`     | 全平台 | 无需模型的离线演示后端（CI / 首次体验）             | —                             |
+## Architecture — three-layer filter
 
-为什么默认选 Ollama、以及 llamafile / ExecuTorch / Apple Foundation Models 等备选，
-见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+```
+        guard run "diagnose not-ready pods in default"
+                          │
+   ① Intent Bridge   ─────▼─────  natural-language entrypoint (CLI / MCP)
+   ② LFM Engine      ─────▼─────  local inference, data stays on device
+        • Local RAG: reads ~/.kube, ~/.ssh as background (non-secret only)
+        • intent alignment: intent -> shell / kubectl
+        • providers: ollama | llamacpp | mlx | mock (OpenAI-compatible)
+   ③ Policy Guard    ─────▼─────  allow / confirm / block
+        • regex + semantic interception (drop / --all / rm -rf ...)
+        • human-in-the-loop confirmation
+                          │
+                    run / refuse / downgrade
+```
 
----
+Inference backends are decoupled from orchestration: every backend speaks the OpenAI-compatible
+protocol, so switching is configuration, not code. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+and the [Tool Call protocol](docs/tool-call-protocol.md).
 
-## 安全模型
+## Inference backends
 
-- **Policy Guard**：每条指令在执行前都被分级为 `allow` / `confirm` / `block`。
-  未命中任何规则的指令默认 `confirm`——未知动作永远需要人确认。
-- **Human-in-the-loop**：默认 plan 模式；`--execute` 下 `confirm` 逐条确认，`block` 一律拒绝。
-- **意图降级**：本地模型无法处理时，**绝不**把上下文发往云端，而是提示用户细化或扩展技能包。
-- **本地 RAG 不外泄**：只读取 `current-context` 等非密钥标识注入提示词，不读取凭证内容。
+Switch via `--provider` or `SENTINEL_PROVIDER`. All speak OpenAI-compatible `/v1/chat/completions`.
 
-内置拦截规则（节选）：`rm -rf /`、`kubectl delete --all`、`delete namespace`、
-`drop/truncate table`、无 `WHERE` 的 `DELETE`、读取 `id_rsa` / `.kube/config` 等。
+| provider   | cross-platform | notes                                         | default endpoint              |
+|------------|----------------|-----------------------------------------------|-------------------------------|
+| `ollama`   | all            | **recommended default**; built-in model mgmt  | `http://localhost:11434/v1`   |
+| `llamacpp` | all            | single binary, no daemon, auditable (GGUF)    | `http://localhost:8080/v1`    |
+| `mlx`      | macOS only     | best performance on Apple Silicon             | `http://localhost:8080/v1`    |
+| `mock`     | all            | no-model offline demo backend (CI / first run)| —                             |
 
----
+> Model weights are never shipped with the repo (`*.gguf` / `*.safetensors` / `models/` are
+> gitignored). Point `SENTINEL_MODEL` at your own LFM 2.5 build.
+
+## Security model
+
+- **Policy Guard**: every command is graded `allow` / `confirm` / `block` before it can run.
+  Anything matching no rule defaults to `confirm` — unknown actions always need a human.
+- **Human-in-the-loop**: plan mode by default; under `--execute`, `confirm` prompts per action
+  and `block` is always refused.
+- **Intent downgrade**: if the local model can't handle a task, Sentinel **never** sends the
+  context to a cloud model — it asks you to refine or extend a skill instead.
+- **Local RAG never exfiltrates**: only non-secret identifiers (e.g. the current kube context)
+  are read into the prompt; credentials and file contents are never read or transmitted.
 
 ## Roadmap
 
-- **第一阶段 · MVP（当前）**：意图桥 + 端侧推理（OpenAI 兼容协议）+ K8s 技能包 + Policy Guard。
-- **第二阶段 · 技能生态**：Database（MySQL/PG）、Cloud CLI（AWS/Aliyun）、Git；完善「意图降级」。
-- **第三阶段 · 企业级合规**：SSO 接入、审计日志上报（仅上报操作类型不报数据）、离线模式。
+- **Phase 1 · MVP (current)** — Intent Bridge, on-device engine (OpenAI-compatible), K8s skill,
+  Policy Guard, MCP server.
+- **Phase 2 · skill ecosystem** — Database (MySQL/PG), Cloud CLI (AWS/Aliyun), Git; richer intent downgrade.
+- **Phase 3 · enterprise compliance** — SSO, audit logging (operation type only, never data), offline mode.
 
-## 风险与对策
-
-| 风险           | 对策                                                       |
-|----------------|------------------------------------------------------------|
-| 模型幻觉       | 强制 Human-in-the-loop；执行前本地校验（如 `--dry-run`）   |
-| 模型升级成本   | 标准化协议层解耦，后端可热插拔                              |
-
----
-
-## 开发
+## Development
 
 ```bash
-make build   # 构建到 bin/guard
+make build   # build to bin/guard
 make test    # go test ./...
 make vet     # go vet ./...
-make run     # mock 后端跑一个示例任务
+make run     # run a sample task with the mock backend
 ```
 
-无第三方运行时依赖（仅标准库）——对一个安全工具而言，更小的供应链攻击面是刻意的设计取舍。
+No third-party runtime dependencies (standard library only) — for a security tool, a smaller
+supply-chain surface is a deliberate trade-off.
 
 ## License
 
-MIT — 见 [LICENSE](LICENSE)。
+MIT — see [LICENSE](LICENSE).
 
-> Alpha 阶段，接口与规则仍可能变动；请勿在未审阅 plan 的情况下对生产环境使用 `--execute`。
+> Alpha: interfaces and rules may still change. Do not use `--execute` against production without
+> reviewing the plan first.
