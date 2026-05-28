@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" width="180" alt="Sentinel-Agent logo">
+  <img src="docs/assets/banner.png" width="840" alt="Sentinel-Agent">
 </p>
 
 <h1 align="center">Sentinel-Agent</h1>
