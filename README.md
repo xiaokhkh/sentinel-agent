@@ -30,6 +30,34 @@ private code, or DB credentials into them. Sentinel-Agent is the **compliant exi
 high-level reasoning wherever you like, but let an on-device model do the privileged work behind
 a security fence.
 
+## Install (macOS-first)
+
+Out-of-the-box: install the small CLI, install the engine once, then just run — the on-device
+model downloads itself on first use. No Ollama, no manual model wrangling.
+
+```bash
+# 1. the CLI itself (small — no model bundled inside)
+go install github.com/xiaokhkh/sentinel-agent/cmd/guard@latest
+
+# 2. the local inference engine, once
+brew install llama.cpp
+
+# 3. run — first run auto-fetches a small LFM2.5 model (~0.8 GB) and serves it locally
+guard run "diagnose not-ready pods in the default namespace"
+```
+
+`guard` starts `llama-server -hf LiquidAI/LFM2.5-1.2B-Instruct-GGUF` for you (llama.cpp downloads
+and caches the GGUF). Manage it with:
+
+```bash
+guard model    # show model / engine / endpoint status
+guard serve    # run the engine in the foreground
+guard stop     # stop the background engine
+```
+
+No engine yet, or just kicking the tires? `guard run --provider mock "..."` runs the whole
+pipeline offline with a built-in mock backend.
+
 ## How you use it
 
 Two modes, same core. Pick per situation.

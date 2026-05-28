@@ -16,6 +16,7 @@ import (
 	"github.com/xiaokhkh/sentinel-agent/internal/config"
 	"github.com/xiaokhkh/sentinel-agent/internal/engine"
 	"github.com/xiaokhkh/sentinel-agent/internal/executor"
+	"github.com/xiaokhkh/sentinel-agent/internal/llama"
 	"github.com/xiaokhkh/sentinel-agent/internal/mcp"
 	"github.com/xiaokhkh/sentinel-agent/internal/permission"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
@@ -43,6 +44,12 @@ func Run(args []string) int {
 		return cmdSkills()
 	case "context":
 		return cmdContext()
+	case "serve":
+		return cmdServe(args[1:])
+	case "stop":
+		return cmdStop()
+	case "model":
+		return cmdModel(args[1:])
 	case "mcp":
 		return cmdMCP()
 	case "version", "--version", "-v":
@@ -64,7 +71,7 @@ func cmdRun(args []string) int {
 	provider := fs.String("provider", cfg.Provider, "inference provider: mock|ollama|llamacpp|mlx")
 	baseURL := fs.String("base-url", cfg.BaseURL, "OpenAI-compatible endpoint base URL")
 	model := fs.String("model", cfg.Model, "model name/tag")
-	mode := fs.String("mode", "readonly", "execution mode: readonly|auto|full")
+	mode := fs.String("mode", cfg.Mode, "execution mode: readonly|auto|full")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -79,6 +86,13 @@ func cmdRun(args []string) int {
 	if !ok {
 		fmt.Fprintf(os.Stderr, "error: unknown mode %q (readonly|auto|full)\n", *mode)
 		return 2
+	}
+
+	if isLlamaCppProvider(*provider) {
+		if err := llama.EnsureServer(*model, *baseURL, 5*time.Minute); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
 	}
 
 	rag := engine.LoadLocalContext()
@@ -136,6 +150,77 @@ func cmdRun(args []string) int {
 	}
 	fmt.Printf("\nsummary: %d ran, %d blocked, %d skipped\n", ran, blocked, skipped)
 	return 0
+}
+
+func cmdServe(args []string) int {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	cfg := config.Load()
+	baseURL := fs.String("base-url", cfg.BaseURL, "OpenAI-compatible endpoint base URL")
+	model := fs.String("model", cfg.Model, "model name/tag")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := llama.RunForeground(*model, *baseURL); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	return 0
+}
+
+func cmdStop() int {
+	if err := llama.Stop(); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Println("local llama-server stopped")
+	return 0
+}
+
+func cmdModel(args []string) int {
+	if len(args) > 0 && args[0] == "pull" {
+		return cmdModelPull(args[1:])
+	}
+	if len(args) > 0 {
+		fmt.Fprintln(os.Stderr, `usage: guard model [pull]`)
+		return 2
+	}
+
+	cfg := config.Load()
+	fmt.Println("model status:")
+	fmt.Printf("  configured model: %s\n", cfg.Model)
+	if path, err := llama.FindBinary(); err != nil {
+		fmt.Printf("  llama-server:     %s\n", err)
+	} else {
+		fmt.Printf("  llama-server:     %s\n", path)
+	}
+	fmt.Printf("  endpoint:         reachable=%v\n", llama.Reachable(cfg.BaseURL, 2*time.Second))
+	fmt.Printf("  sentinel home:    %s\n", llama.Home())
+	return 0
+}
+
+func cmdModelPull(args []string) int {
+	fs := flag.NewFlagSet("model pull", flag.ContinueOnError)
+	cfg := config.Load()
+	baseURL := fs.String("base-url", cfg.BaseURL, "OpenAI-compatible endpoint base URL")
+	model := fs.String("model", cfg.Model, "model name/tag")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := llama.EnsureServer(*model, *baseURL, 5*time.Minute); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	fmt.Println("model cache warm; local llama-server is running")
+	return 0
+}
+
+func isLlamaCppProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "llamacpp", "llama.cpp", "llama":
+		return true
+	default:
+		return false
+	}
 }
 
 func cmdPolicy(args []string) int {
@@ -197,11 +282,15 @@ usage:
   guard policy check "<command>"                test a command against the Policy Guard
   guard skills                                  list available capability packs
   guard context                                 show local RAG context (no secrets)
+  guard serve                                   run llama-server in the foreground
+  guard stop                                    stop the background llama-server
+  guard model                                   show local model/bootstrap status
+  guard model pull                              warm the local llama.cpp model cache
   guard mcp                                     run as an MCP server (stdio) for cloud LLM clients
   guard version                                 print version
 
 run flags:
-  --provider   mock|ollama|llamacpp|mlx   inference backend (default: ollama)
+  --provider   mock|ollama|llamacpp|mlx   inference backend (default: llamacpp)
   --base-url   <url>                      OpenAI-compatible endpoint base URL
   --model      <tag>                      model name/tag
   --mode       readonly|auto|full         autonomy level (default: readonly)
@@ -210,6 +299,7 @@ run flags:
 
 examples:
   guard run --provider mock "诊断 default 命名空间里未就绪的 pod"
+  guard model pull
   guard run --mode readonly "show logs for the payment service"
   guard policy check "kubectl delete pods --all"
 `)

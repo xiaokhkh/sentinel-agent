@@ -61,6 +61,7 @@ internal/policy      Policy Guard 规则与判定（安全执行围栏）
 internal/permission  权限分级（plan/readonly/auto/full）× 判定 → 执行/询问/拒绝
 internal/redact      脱敏器：输出离开本机前抹去密钥/凭证（云端 loop 的隐私命门）
 internal/executor    Human-in-the-loop 执行器
+internal/llama       本地 llama.cpp 生命周期：检测 llama-server、-hf 自动下载模型、起停
 internal/mcp         MCP stdio 服务（云端编排 + 端侧安全执行）
 internal/skills      技能包注册表
 internal/skills/k8s  Kubernetes 技能包

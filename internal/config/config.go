@@ -20,14 +20,14 @@ type Config struct {
 	Mode     string // permission mode for autonomous (MCP) execution
 }
 
-// Default returns the baseline configuration. Ollama is the recommended
-// production backend; the CLI falls back to the `mock` provider on demand.
+// Default returns the baseline configuration. llama.cpp is the default backend
+// so a fresh guard install can bootstrap its own local model.
 // Mode defaults to readonly: autonomous execution auto-runs read-only commands
 // and defers mutations.
 func Default() Config {
 	return Config{
-		Provider: "ollama",
-		Model:    "lfm2.5",
+		Provider: "llamacpp",
+		Model:    "LiquidAI/LFM2.5-1.2B-Instruct-GGUF",
 		Timeout:  60 * time.Second,
 		Mode:     "readonly",
 	}

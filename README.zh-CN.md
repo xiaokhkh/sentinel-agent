@@ -27,6 +27,31 @@
 云端大模型很强，但越来越多团队禁止把 K8s 配置、私有代码、数据库凭证贴进去。Sentinel-Agent 就是那个
 **合规的出口**：高层推理放在任何你信任的地方，而特权操作交给端侧模型在安全围栏后完成。
 
+## 安装（macOS 优先）
+
+开箱即用：装好小巧的 CLI、装一次推理引擎，然后直接跑——端侧模型首次运行时自动下载。无需 Ollama，无需手动折腾模型。
+
+```bash
+# 1. CLI 本体（很小，不含模型）
+go install github.com/xiaokhkh/sentinel-agent/cmd/guard@latest
+
+# 2. 本地推理引擎，装一次
+brew install llama.cpp
+
+# 3. 直接跑——首次运行自动拉取一个小的 LFM2.5 模型（约 0.8 GB）并在本地起服务
+guard run "诊断 default 命名空间里未就绪的 pod"
+```
+
+`guard` 会替你启动 `llama-server -hf LiquidAI/LFM2.5-1.2B-Instruct-GGUF`（由 llama.cpp 下载并缓存 GGUF）。管理命令：
+
+```bash
+guard model    # 查看 模型 / 引擎 / 端点 状态
+guard serve    # 前台运行引擎
+guard stop     # 停止后台引擎
+```
+
+还没装引擎、或只想先体验流程？`guard run --provider mock "..."` 用内置 mock 后端离线跑通整条管线。
+
 ## 用户如何使用
 
 两种模式、同一内核，按场景选用。
