@@ -17,15 +17,19 @@ type Config struct {
 	Model    string
 	APIKey   string
 	Timeout  time.Duration
+	Mode     string // permission mode for autonomous (MCP) execution
 }
 
 // Default returns the baseline configuration. Ollama is the recommended
 // production backend; the CLI falls back to the `mock` provider on demand.
+// Mode defaults to readonly: autonomous execution auto-runs read-only commands
+// and defers mutations.
 func Default() Config {
 	return Config{
 		Provider: "ollama",
 		Model:    "lfm2.5",
 		Timeout:  60 * time.Second,
+		Mode:     "readonly",
 	}
 }
 
@@ -43,6 +47,9 @@ func Load() Config {
 	}
 	if v := os.Getenv("SENTINEL_API_KEY"); v != "" {
 		c.APIKey = v
+	}
+	if v := os.Getenv("SENTINEL_MODE"); v != "" {
+		c.Mode = v
 	}
 	return c
 }

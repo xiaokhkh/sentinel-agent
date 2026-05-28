@@ -58,6 +58,8 @@ cmd/guard            CLI 入口
 internal/cli         子命令分发（意图接口层）
 internal/engine      推理核心、RAG、provider 抽象（端侧推理芯）
 internal/policy      Policy Guard 规则与判定（安全执行围栏）
+internal/permission  权限分级（plan/readonly/auto/full）× 判定 → 执行/询问/拒绝
+internal/redact      脱敏器：输出离开本机前抹去密钥/凭证（云端 loop 的隐私命门）
 internal/executor    Human-in-the-loop 执行器
 internal/mcp         MCP stdio 服务（云端编排 + 端侧安全执行）
 internal/skills      技能包注册表
@@ -68,6 +70,20 @@ internal/config      env + 默认值配置
 ## 两种使用形态
 
 - **CLI**：人在终端直接 `guard run`，完全本地、含 Human-in-the-loop 执行。
-- **MCP 服务**（`guard mcp`）：以 stdio JSON-RPC 暴露 `run_task` / `policy_check` /
-  `local_context` / `list_skills`。云端大模型作为客户端下发意图，端侧完成「规划 + 审查」，
-  只回传审查后的计划；本地凭证与配置不出域。`run_task` 刻意只规划不执行。
+- **MCP 服务**（`guard mcp`）：以 stdio JSON-RPC 暴露 `run_task` / `execute_step` /
+  `policy_check` / `local_context` / `list_skills`。端侧模型作为云端模型的 skill/tool：
+  云端规划，端侧执行具体步骤并对输出脱敏后回传，形成「云端规划 → 端侧执行+脱敏 → 再次交互」的 loop。
+
+## 权限分级（plan / readonly / auto / full）
+
+借鉴 Claude Code 的权限模式与 Codex 的 sandbox/approval。执行结果 = Policy Guard 判定 × 模式：
+
+| 判定 \ 模式      | plan | readonly | auto | full |
+|------------------|------|----------|------|------|
+| allow（只读）    | 展示 | 执行     | 执行 | 执行 |
+| confirm（变更）  | 展示 | 询问     | 执行 | 执行 |
+| block（危险）    | 展示 | 拒绝     | 拒绝 | 执行 |
+
+- CLI 默认 `plan`；「询问」= 终端 y/N。
+- MCP 默认 `readonly`；「询问」= 返回 `approval_required`，由 MCP 客户端的工具审批弹窗做人工门。
+- `execute_step` 真正执行时，输出先过 `internal/redact` 脱敏再回传——云端 loop 下「只出脱敏数据」。

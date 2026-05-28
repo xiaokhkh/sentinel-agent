@@ -1,6 +1,7 @@
-// Package executor applies a Plan under the Policy Guard with a human in the
-// loop. It defaults to plan-only (dry) mode: actions are printed but never run
-// unless Execute is set. Blocked actions are never run regardless of mode.
+// Package executor applies a Plan under the Policy Guard and the configured
+// permission mode. "Ask"-tier actions prompt the user (y/N) at the terminal;
+// "refuse" never runs; "run" executes. Plan mode shows everything and runs
+// nothing.
 package executor
 
 import (
@@ -12,20 +13,20 @@ import (
 	"strings"
 
 	"github.com/xiaokhkh/sentinel-agent/internal/engine"
+	"github.com/xiaokhkh/sentinel-agent/internal/permission"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
 )
 
-// Executor runs the actions of a plan.
+// Executor runs the actions of a plan at a given autonomy level.
 type Executor struct {
-	Execute bool // when false (default) actions are printed but not executed
-	AutoYes bool // skip confirmation prompts; still refuses blocked actions
-	In      io.Reader
-	Out     io.Writer
+	Mode permission.Mode
+	In   io.Reader
+	Out  io.Writer
 }
 
 // New returns an Executor wired to stdin/stdout.
-func New(execute, autoYes bool) *Executor {
-	return &Executor{Execute: execute, AutoYes: autoYes, In: os.Stdin, Out: os.Stdout}
+func New(mode permission.Mode) *Executor {
+	return &Executor{Mode: mode, In: os.Stdin, Out: os.Stdout}
 }
 
 // Result records what happened to one action.
@@ -37,7 +38,7 @@ type Result struct {
 	Err     error
 }
 
-// RunPlan evaluates and (optionally) runs every action in order.
+// RunPlan evaluates and (per mode) runs every action in order.
 func (e *Executor) RunPlan(plan *engine.Plan, guard *policy.Guard) []Result {
 	results := make([]Result, 0, len(plan.Actions))
 	for i, a := range plan.Actions {
@@ -45,22 +46,31 @@ func (e *Executor) RunPlan(plan *engine.Plan, guard *policy.Guard) []Result {
 		r := Result{Action: a, Verdict: v}
 		e.printAction(i+1, a, v)
 
-		switch {
-		case v.Decision == policy.Block:
-			fmt.Fprintf(e.Out, "    -> BLOCKED by policy (%s); will not execute\n", v.Rule)
+		switch permission.Decide(v.Decision, e.Mode) {
+		case permission.Refuse:
+			if v.Decision == policy.Block {
+				fmt.Fprintf(e.Out, "    -> BLOCKED by policy (%s); not executed\n", v.Rule)
+			} else {
+				fmt.Fprintln(e.Out, "    -> plan mode: not executed (use --mode readonly|auto to run)")
+			}
 			r.Skipped = true
-		case !e.Execute:
-			fmt.Fprintln(e.Out, "    -> plan mode: not executing (pass --execute to run)")
-			r.Skipped = true
-		case v.Decision == policy.Confirm && !e.confirm():
-			fmt.Fprintln(e.Out, "    -> skipped by user")
-			r.Skipped = true
-		default:
+		case permission.Ask:
+			if e.confirm() {
+				r.Err = e.run(a)
+				r.Ran = r.Err == nil
+			} else {
+				fmt.Fprintln(e.Out, "    -> skipped by user")
+				r.Skipped = true
+			}
+		case permission.Run:
+			if v.Decision == policy.Block {
+				fmt.Fprintln(e.Out, "    -> WARNING: executing a BLOCKED command (full mode)")
+			}
 			r.Err = e.run(a)
 			r.Ran = r.Err == nil
-			if r.Err != nil {
-				fmt.Fprintf(e.Out, "    -> error: %v\n", r.Err)
-			}
+		}
+		if r.Err != nil {
+			fmt.Fprintf(e.Out, "    -> error: %v\n", r.Err)
 		}
 		results = append(results, r)
 	}
@@ -77,9 +87,6 @@ func (e *Executor) printAction(idx int, a engine.Action, v policy.Verdict) {
 }
 
 func (e *Executor) confirm() bool {
-	if e.AutoYes {
-		return true
-	}
 	fmt.Fprint(e.Out, "    Proceed? [y/N]: ")
 	line, _ := bufio.NewReader(e.In).ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {

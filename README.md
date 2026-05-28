@@ -47,28 +47,42 @@ go build -o bin/guard ./cmd/guard
 # screen a single command against the security fence
 ./bin/guard policy check "kubectl delete pods --all"   # -> BLOCK
 
-# plan only by default; add --execute to actually run (with confirmation)
-./bin/guard run --execute "restart the nginx deployment"
+# plan-only by default; raise the autonomy level to act (Claude-Code/Codex-style tiers)
+./bin/guard run --mode readonly "show logs for the payment service"   # runs reads, asks on writes
+./bin/guard run --mode auto     "restart the nginx deployment"        # runs reads + writes
 ```
+
+Permission tiers (`--mode`) combine with the Policy Guard verdict:
+
+| verdict \ mode      | `plan` | `readonly` | `auto` | `full` |
+|---------------------|:------:|:----------:|:------:|:------:|
+| allow (read-only)   | show   | run        | run    | run    |
+| confirm (mutating)  | show   | ask        | run    | run    |
+| block (dangerous)   | show   | refuse     | refuse | run ⚠  |
 
 ### Mode 2 — MCP server (cloud orchestrator + on-device safe execution)
 
 Run `guard mcp` and register it in any MCP client (Claude Desktop, Cursor, Codex, ...).
-The cloud model delegates an intent; the **on-device** model plans it, the Policy Guard screens
-it, and only the screened plan comes back. Your kube/ssh config and secrets never travel.
+The **on-device model is a skill/tool of the cloud model**. The cloud orchestrator does the
+high-level planning; Sentinel runs the concrete steps locally and **desensitizes** the output
+before returning it, so the cloud model can reason over results without ever seeing raw secrets.
 
 ```
- Cloud LLM (Claude Desktop / Cursor / Codex)
-        │  run_task("diagnose ...")        ← only the intent leaves
+ Cloud LLM (planner)  — Claude Desktop / Cursor / Codex
+        │  run_task / execute_step("kubectl logs ...")   ← only the intent leaves
         ▼
-   guard mcp   (this machine)
-   ├─ LFM Engine   → plan with the local model
-   ├─ Local RAG    → reads kube/ssh context  (never sent out)
-   └─ Policy Guard → allow / confirm / block
-        │  screened plan only              → returned to the cloud client
+   guard mcp   (this machine = executor + sanitizer)
+   ├─ LFM Engine   → plan / refine with the local model
+   ├─ Local RAG    → reads kube/ssh context     (never sent out)
+   ├─ Policy Guard → allow / confirm / block  ×  mode (plan/readonly/auto/full)
+   └─ Redactor     → strips keys, tokens, creds, emails
+        │  desensitized result only                      → back to the cloud planner
         ▼
-   you run it with `guard run --execute`   (human in the loop)
+   cloud plans the next step  ──▶  loop
 ```
+
+This is the **compliant exit**: the powerful model stays in the cloud, the privileged work and the
+raw data stay on the machine, and only sanitized observations cross the boundary.
 
 Register it (Claude Desktop / generic MCP client `mcpServers` entry):
 
@@ -86,8 +100,10 @@ Register it (Claude Desktop / generic MCP client `mcpServers` entry):
 
 Or with Codex: `codex mcp add sentinel-agent -- guard mcp`
 
-Tools exposed over MCP: `run_task`, `policy_check`, `local_context`, `list_skills`.
-`run_task` is **plan-only** — execution stays with the human-driven CLI on purpose.
+Tools exposed over MCP: `run_task` (plan a task locally), `execute_step` (run one command under
+the guard + mode, returning **redacted** output), `policy_check`, `local_context`, `list_skills`.
+The server's autonomy is set by `SENTINEL_MODE` (default `readonly`); the MCP client's own
+tool-approval prompt is the human gate for `ask`-tier (mutating) steps.
 
 ## Architecture — three-layer filter
 
@@ -128,10 +144,15 @@ Switch via `--provider` or `SENTINEL_PROVIDER`. All speak OpenAI-compatible `/v1
 
 - **Policy Guard**: every command is graded `allow` / `confirm` / `block` before it can run.
   Anything matching no rule defaults to `confirm` — unknown actions always need a human.
-- **Human-in-the-loop**: plan mode by default; under `--execute`, `confirm` prompts per action
-  and `block` is always refused.
-- **Intent downgrade**: if the local model can't handle a task, Sentinel **never** sends the
-  context to a cloud model — it asks you to refine or extend a skill instead.
+- **Permission tiers**: a Claude-Code/Codex-style `--mode` (`plan`/`readonly`/`auto`/`full`)
+  combines with the verdict to decide run / ask / refuse. Default CLI mode is `plan`; default
+  MCP mode is `readonly`.
+- **Redaction (desensitization)**: any executed output that may leave the machine is sanitized
+  first — private keys, JWTs, cloud keys, kubeconfig secrets, credentials in URLs, emails, and
+  long base64 blobs are stripped. In the cloud-planner loop the privacy guarantee is **"only
+  desensitized data leaves"**, and the redactor is the linchpin that enforces it.
+- **Intent downgrade**: if the local model can't produce a plan, Sentinel **never** silently
+  escalates the raw task off-device — it surfaces the downgrade to you/the client instead.
 - **Local RAG never exfiltrates**: only non-secret identifiers (e.g. the current kube context)
   are read into the prompt; credentials and file contents are never read or transmitted.
 

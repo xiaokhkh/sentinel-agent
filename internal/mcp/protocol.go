@@ -69,6 +69,15 @@ func toolDefs() []map[string]any {
 			},
 		},
 		{
+			"name":        "execute_step",
+			"description": "Run a single concrete command on this machine under the Policy Guard and the server's permission mode. Read-only commands run and return REDACTED output; mutating commands return approval_required and are not run; dangerous commands are refused. Use this in a cloud-plan / on-device-execute loop: the output is desensitized before it returns.",
+			"inputSchema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"command": strProp("a single shell or kubectl command to run")},
+				"required":   []string{"command"},
+			},
+		},
+		{
 			"name":        "policy_check",
 			"description": "Classify a single shell/kubectl command as allow, confirm, or block using the Policy Guard.",
 			"inputSchema": map[string]any{

@@ -17,6 +17,7 @@ import (
 	"github.com/xiaokhkh/sentinel-agent/internal/engine"
 	"github.com/xiaokhkh/sentinel-agent/internal/executor"
 	"github.com/xiaokhkh/sentinel-agent/internal/mcp"
+	"github.com/xiaokhkh/sentinel-agent/internal/permission"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
 	"github.com/xiaokhkh/sentinel-agent/internal/skills"
 
@@ -63,8 +64,7 @@ func cmdRun(args []string) int {
 	provider := fs.String("provider", cfg.Provider, "inference provider: mock|ollama|llamacpp|mlx")
 	baseURL := fs.String("base-url", cfg.BaseURL, "OpenAI-compatible endpoint base URL")
 	model := fs.String("model", cfg.Model, "model name/tag")
-	execute := fs.Bool("execute", false, "actually run the planned actions (default: plan only)")
-	autoYes := fs.Bool("yes", false, "skip confirmation prompts (blocked actions are still refused)")
+	mode := fs.String("mode", "plan", "execution mode: plan|readonly|auto|full")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -72,6 +72,12 @@ func cmdRun(args []string) int {
 	task := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if task == "" {
 		fmt.Fprintln(os.Stderr, `usage: guard run [flags] "<natural language task>"`)
+		return 2
+	}
+
+	pmode, ok := permission.ParseMode(*mode)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "error: unknown mode %q (plan|readonly|auto|full)\n", *mode)
 		return 2
 	}
 
@@ -112,10 +118,10 @@ func cmdRun(args []string) int {
 		return 1
 	}
 
-	fmt.Printf("\ngenerated plan (%d action(s)):\n\n", len(plan.Actions))
+	fmt.Printf("\ngenerated plan (%d action(s)) [mode=%s]:\n\n", len(plan.Actions), pmode)
 	guard := policy.New()
-	exec := executor.New(*execute, *autoYes)
-	results := exec.RunPlan(plan, guard)
+	exc := executor.New(pmode)
+	results := exc.RunPlan(plan, guard)
 
 	var ran, blocked, skipped int
 	for _, r := range results {
@@ -129,8 +135,8 @@ func cmdRun(args []string) int {
 		}
 	}
 	fmt.Printf("\nsummary: %d ran, %d blocked, %d skipped\n", ran, blocked, skipped)
-	if !*execute {
-		fmt.Println("(plan mode — re-run with --execute to apply)")
+	if pmode == permission.Plan {
+		fmt.Println("(plan mode — re-run with --mode readonly|auto to apply)")
 	}
 	return 0
 }
@@ -201,11 +207,13 @@ run flags:
   --provider   mock|ollama|llamacpp|mlx   inference backend (default: ollama)
   --base-url   <url>                      OpenAI-compatible endpoint base URL
   --model      <tag>                      model name/tag
-  --execute                               actually run actions (default: plan only)
-  --yes                                   skip confirmation prompts (blocked actions still refused)
+  --mode       plan|readonly|auto|full    autonomy level (default: plan)
+                                            plan=show only; readonly=run reads, ask on writes;
+                                            auto=run reads+writes; full=run everything (dangerous)
 
 examples:
   guard run --provider mock "诊断 default 命名空间里未就绪的 pod"
+  guard run --mode readonly "show logs for the payment service"
   guard policy check "kubectl delete pods --all"
 `)
 }

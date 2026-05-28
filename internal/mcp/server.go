@@ -15,15 +15,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os/exec"
 	"time"
 
 	"github.com/xiaokhkh/sentinel-agent/internal/config"
 	"github.com/xiaokhkh/sentinel-agent/internal/engine"
+	"github.com/xiaokhkh/sentinel-agent/internal/permission"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
+	"github.com/xiaokhkh/sentinel-agent/internal/redact"
 	"github.com/xiaokhkh/sentinel-agent/internal/skills"
 )
 
 const protocolVersion = "2024-11-05"
+
+const maxOutputBytes = 8000
 
 // Server is a minimal MCP stdio server.
 type Server struct {
@@ -31,11 +36,17 @@ type Server struct {
 	out   io.Writer
 	cfg   config.Config
 	guard *policy.Guard
+	mode  permission.Mode
 }
 
-// NewServer builds a server reading from in and writing to out.
+// NewServer builds a server reading from in and writing to out. The autonomy
+// level comes from cfg.Mode (default readonly when unset/invalid).
 func NewServer(in io.Reader, out io.Writer, cfg config.Config) *Server {
-	return &Server{in: in, out: out, cfg: cfg, guard: policy.New()}
+	mode, ok := permission.ParseMode(cfg.Mode)
+	if !ok {
+		mode = permission.ReadOnly
+	}
+	return &Server{in: in, out: out, cfg: cfg, guard: policy.New(), mode: mode}
 }
 
 // Serve runs the read-dispatch-respond loop until stdin closes.
@@ -93,6 +104,8 @@ func (s *Server) handleToolCall(req rpcRequest) {
 	switch p.Name {
 	case "run_task":
 		s.write(result(req.ID, s.toolRunTask(p.Arguments)))
+	case "execute_step":
+		s.write(result(req.ID, s.toolExecuteStep(p.Arguments)))
 	case "policy_check":
 		s.write(result(req.ID, s.toolPolicyCheck(p.Arguments)))
 	case "local_context":
@@ -141,22 +154,74 @@ func (s *Server) toolRunTask(args json.RawMessage) map[string]any {
 		Decision    string `json:"decision"`
 		Risk        string `json:"risk"`
 		Rule        string `json:"rule"`
+		Outcome     string `json:"outcome_under_mode"`
 	}
 	out := struct {
 		Task     string     `json:"task"`
 		Provider string     `json:"provider"`
+		Mode     string     `json:"mode"`
 		Actions  []screened `json:"actions"`
 		Note     string     `json:"note"`
-	}{Task: a.Task, Provider: plan.Source, Note: "plan only; run via the guard CLI with a human in the loop"}
+	}{
+		Task: a.Task, Provider: plan.Source, Mode: string(s.mode),
+		Note: "call execute_step to run an action; mutating steps may need approval per the server mode",
+	}
 
 	for _, ac := range plan.Actions {
 		v := s.guard.Evaluate(ac.Command)
 		out.Actions = append(out.Actions, screened{
 			Kind: string(ac.Kind), Command: ac.Command, Explanation: ac.Explanation,
 			Decision: string(v.Decision), Risk: string(v.Risk), Rule: v.Rule,
+			Outcome: string(permission.Decide(v.Decision, s.mode)),
 		})
 	}
 	return toolJSON(out)
+}
+
+// toolExecuteStep runs a single command under the Policy Guard and the server's
+// permission mode. Only "run"-tier commands execute; their output is REDACTED
+// before being returned, so secrets never reach the cloud client. "ask"-tier
+// (mutating) commands are not run — they require approval via the MCP client or
+// the guard CLI.
+func (s *Server) toolExecuteStep(args json.RawMessage) map[string]any {
+	var a struct {
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal(args, &a)
+	if a.Command == "" {
+		return toolError("missing required argument: command")
+	}
+
+	v := s.guard.Evaluate(a.Command)
+	res := map[string]any{
+		"command": a.Command, "decision": v.Decision, "risk": v.Risk,
+		"rule": v.Rule, "mode": s.mode,
+	}
+
+	switch permission.Decide(v.Decision, s.mode) {
+	case permission.Refuse:
+		res["status"] = "refused"
+		if v.Decision == policy.Block {
+			res["reason"] = "blocked by policy: " + v.Reason
+		} else {
+			res["reason"] = "server is in plan mode; nothing is executed"
+		}
+	case permission.Ask:
+		res["status"] = "approval_required"
+		res["reason"] = "mutating command not auto-executed; approve via your MCP client or run it through the guard CLI"
+	case permission.Run:
+		out, err := exec.Command("sh", "-c", a.Command).CombinedOutput()
+		text := string(out)
+		if len(text) > maxOutputBytes {
+			text = text[:maxOutputBytes] + "\n...[truncated]"
+		}
+		res["status"] = "executed"
+		res["output"] = redact.Redact(text) // desensitized before leaving the machine
+		if err != nil {
+			res["error"] = err.Error()
+		}
+	}
+	return toolJSON(res)
 }
 
 func (s *Server) toolPolicyCheck(args json.RawMessage) map[string]any {

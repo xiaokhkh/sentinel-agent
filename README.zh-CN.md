@@ -44,28 +44,40 @@ go build -o bin/guard ./cmd/guard
 # 单独把一条指令丢给安全围栏判定
 ./bin/guard policy check "kubectl delete pods --all"   # -> BLOCK
 
-# 默认 plan 模式；加 --execute 才真正执行（且逐条确认）
-./bin/guard run --execute "重启 nginx deployment"
+# 默认 plan 模式；用 --mode 提升自治级别（Claude Code / Codex 式分级）
+./bin/guard run --mode readonly "查看 payment 服务日志"   # 跑只读，遇写操作询问
+./bin/guard run --mode auto     "重启 nginx deployment"   # 读写都跑
 ```
+
+权限分级（`--mode`）与 Policy Guard 判定组合决定行为：
+
+| 判定 \ 模式         | `plan` | `readonly` | `auto` | `full` |
+|---------------------|:------:|:----------:|:------:|:------:|
+| allow（只读）       | 展示   | 执行       | 执行   | 执行   |
+| confirm（变更）     | 展示   | 询问       | 执行   | 执行   |
+| block（危险）       | 展示   | 拒绝       | 拒绝   | 执行 ⚠ |
 
 ### 模式二 —— MCP 服务（云端编排 + 端侧安全执行）
 
 运行 `guard mcp`，在任意 MCP 客户端（Claude Desktop、Cursor、Codex…）里注册它。
-云端模型只下发**意图**；由**端侧**模型规划、Policy Guard 审查，最终只把审查后的计划回传。
-你的 kube/ssh 配置与密钥从不外传。
+**端侧模型作为云端模型的 skill/tool**：云端做高层规划，Sentinel 在本机执行具体步骤、对输出**脱敏**后回传，
+云端据此推理而永远看不到原始密钥。
 
 ```
- 云端大模型 (Claude Desktop / Cursor / Codex)
-        │  run_task("诊断 ...")            ← 只有意图离开本机
+ 云端大模型(规划者) — Claude Desktop / Cursor / Codex
+        │  run_task / execute_step("kubectl logs ...")   ← 只有意图离开本机
         ▼
-   guard mcp   (本机)
-   ├─ LFM Engine   → 端侧模型生成计划
-   ├─ Local RAG    → 读取 kube/ssh 上下文   (绝不外传)
-   └─ Policy Guard → allow / confirm / block
-        │  仅回传审查后的计划              → 返回云端客户端
+   guard mcp   (本机 = 执行者 + 脱敏器)
+   ├─ LFM Engine   → 端侧模型规划 / 细化
+   ├─ Local RAG    → 读取 kube/ssh 上下文      (绝不外传)
+   ├─ Policy Guard → allow / confirm / block  ×  mode (plan/readonly/auto/full)
+   └─ Redactor     → 抹去 key / token / 凭证 / 邮箱
+        │  仅回传脱敏后的结果                            → 返回云端规划者
         ▼
-   你用 `guard run --execute` 执行          (Human-in-the-loop)
+   云端规划下一步  ──▶  循环
 ```
+
+这就是**合规的出口**：强模型留在云端，特权操作与原始数据留在本机，只有脱敏后的观测结果跨越边界。
 
 注册方式（Claude Desktop / 通用 MCP 客户端的 `mcpServers` 配置）：
 
@@ -83,8 +95,9 @@ go build -o bin/guard ./cmd/guard
 
 或用 Codex：`codex mcp add sentinel-agent -- guard mcp`
 
-通过 MCP 暴露的工具：`run_task`、`policy_check`、`local_context`、`list_skills`。
-其中 `run_task` 刻意设计为**只规划不执行** —— 执行始终保留给 Human-in-the-loop 的 CLI。
+通过 MCP 暴露的工具：`run_task`（本地规划任务）、`execute_step`（在围栏+模式下执行单条命令，回传**脱敏**输出）、
+`policy_check`、`local_context`、`list_skills`。服务自治级别由 `SENTINEL_MODE` 决定（默认 `readonly`）；
+对 `ask` 级（变更类）步骤，MCP 客户端自身的工具调用审批弹窗即人工门。
 
 ## 三层过滤架构
 
@@ -123,8 +136,9 @@ go build -o bin/guard ./cmd/guard
 ## 安全模型
 
 - **Policy Guard**：每条指令执行前都被分级 `allow` / `confirm` / `block`；未命中任何规则默认 `confirm`——未知动作永远需要人确认。
-- **Human-in-the-loop**：默认 plan 模式；`--execute` 下 `confirm` 逐条确认，`block` 一律拒绝。
-- **意图降级**：本地模型处理不了时，**绝不**把上下文发往云端，而是提示你细化或扩展技能包。
+- **权限分级**：Claude Code / Codex 式的 `--mode`（`plan`/`readonly`/`auto`/`full`）与判定组合决定 执行/询问/拒绝。CLI 默认 `plan`，MCP 默认 `readonly`。
+- **脱敏（desensitization）**：任何可能离开本机的执行输出先经脱敏——私钥、JWT、云厂商 key、kubeconfig 密钥、URL 里的凭证、邮箱、长 base64 块统统抹去。在云端规划 loop 下，隐私承诺是**"只出脱敏数据"**，而 Redactor 就是这条保证的命门。
+- **意图降级**：本地模型给不出计划时，**绝不**把原始任务静默升级到云端，而是把降级显式抛给你/客户端。
 - **本地 RAG 不外泄**：只把 `current-context` 等非密钥标识注入提示词，凭证与文件内容从不读取或外传。
 
 ## Roadmap
