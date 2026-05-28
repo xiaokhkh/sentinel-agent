@@ -99,24 +99,14 @@ go build -o bin/guard ./cmd/guard
 `policy_check`、`local_context`、`list_skills`。服务自治级别由 `SENTINEL_MODE` 决定（默认 `readonly`）；
 对 `ask` 级（变更类）步骤，MCP 客户端自身的工具调用审批弹窗即人工门。
 
-## 三层过滤架构
+## 架构与流程
 
-```
-        guard run "诊断 default 里未就绪的 pod"
-                          │
-   ① 意图接口层  ─────▼─────  自然语言入口 (CLI / MCP)
-   ② 端侧推理芯  ─────▼─────  本地推理，数据不出域
-        • Local RAG：读取 ~/.kube、~/.ssh 作背景（仅非密钥信息）
-        • 意图对齐：意图 -> shell / kubectl
-        • Provider：ollama | llamacpp | mlx | mock（OpenAI 兼容）
-   ③ 安全执行围栏 ─────▼─────  allow / confirm / block
-        • 正则 + 语义拦截（drop / --all / rm -rf …）
-        • Human-in-the-loop 确认
-                          │
-                    执行 / 拒绝 / 降级
-```
+<p align="center">
+  <img src="docs/assets/architecture.svg" width="760" alt="Sentinel-Agent 架构与流程">
+</p>
 
-推理后端与编排层解耦：所有后端走 OpenAI 兼容协议，换后端是改配置而非改代码。
+云端规划者只下发意图；端侧四层（意图接口层 → 端侧推理芯 → 安全围栏 → Redactor）在本地规划并执行，
+只有**脱敏后**的结果回环。推理后端与编排层解耦：所有后端走 OpenAI 兼容协议，换后端是改配置而非改代码。
 详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 与 [Tool Call 协议](docs/tool-call-protocol.md)。
 
 ## 推理后端

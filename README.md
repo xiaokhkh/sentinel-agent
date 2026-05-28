@@ -105,24 +105,15 @@ the guard + mode, returning **redacted** output), `policy_check`, `local_context
 The server's autonomy is set by `SENTINEL_MODE` (default `readonly`); the MCP client's own
 tool-approval prompt is the human gate for `ask`-tier (mutating) steps.
 
-## Architecture — three-layer filter
+## Architecture &amp; flow
 
-```
-        guard run "diagnose not-ready pods in default"
-                          │
-   ① Intent Bridge   ─────▼─────  natural-language entrypoint (CLI / MCP)
-   ② LFM Engine      ─────▼─────  local inference, data stays on device
-        • Local RAG: reads ~/.kube, ~/.ssh as background (non-secret only)
-        • intent alignment: intent -> shell / kubectl
-        • providers: ollama | llamacpp | mlx | mock (OpenAI-compatible)
-   ③ Policy Guard    ─────▼─────  allow / confirm / block
-        • regex + semantic interception (drop / --all / rm -rf ...)
-        • human-in-the-loop confirmation
-                          │
-                    run / refuse / downgrade
-```
+<p align="center">
+  <img src="docs/assets/architecture.svg" width="760" alt="Sentinel-Agent architecture and flow">
+</p>
 
-Inference backends are decoupled from orchestration: every backend speaks the OpenAI-compatible
+The cloud planner sends only an intent; the on-device layers (Intent Bridge → LFM Engine →
+Policy Guard → Redactor) plan and execute locally, and only the **desensitized** result loops
+back. Inference backends are decoupled from orchestration: every backend speaks the OpenAI-compatible
 protocol, so switching is configuration, not code. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 and the [Tool Call protocol](docs/tool-call-protocol.md).
 
