@@ -74,16 +74,16 @@ internal/config      env + 默认值配置
   `policy_check` / `local_context` / `list_skills`。端侧模型作为云端模型的 skill/tool：
   云端规划，端侧执行具体步骤并对输出脱敏后回传，形成「云端规划 → 端侧执行+脱敏 → 再次交互」的 loop。
 
-## 权限分级（plan / readonly / auto / full）
+## 权限分级（readonly / auto / full）
 
 借鉴 Claude Code 的权限模式与 Codex 的 sandbox/approval。执行结果 = Policy Guard 判定 × 模式：
 
-| 判定 \ 模式      | plan | readonly | auto | full |
-|------------------|------|----------|------|------|
-| allow（只读）    | 展示 | 执行     | 执行 | 执行 |
-| confirm（变更）  | 展示 | 询问     | 执行 | 执行 |
-| block（危险）    | 展示 | 拒绝     | 拒绝 | 执行 |
+| 判定 \ 模式      | readonly | auto | full |
+|------------------|----------|------|------|
+| allow（只读）    | 执行     | 执行 | 执行 |
+| confirm（变更）  | 询问     | 执行 | 执行 |
+| block（危险）    | 拒绝     | 拒绝 | 执行 |
 
-- CLI 默认 `plan`；「询问」= 终端 y/N。
-- MCP 默认 `readonly`；「询问」= 返回 `approval_required`，由 MCP 客户端的工具审批弹窗做人工门。
+- CLI 与 MCP 默认均为 `readonly`。
+- CLI 下「询问」= 终端 y/N；MCP 下「询问」= 返回 `approval_required`，由 MCP 客户端的工具审批弹窗做人工门。
 - `execute_step` 真正执行时，输出先过 `internal/redact` 脱敏再回传——云端 loop 下「只出脱敏数据」。

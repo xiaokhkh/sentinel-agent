@@ -44,18 +44,18 @@ go build -o bin/guard ./cmd/guard
 # 单独把一条指令丢给安全围栏判定
 ./bin/guard policy check "kubectl delete pods --all"   # -> BLOCK
 
-# 默认 plan 模式；用 --mode 提升自治级别（Claude Code / Codex 式分级）
+# 默认 readonly（跑只读、遇写操作询问）；用 --mode 提升自治级别（Claude Code / Codex 式分级）
 ./bin/guard run --mode readonly "查看 payment 服务日志"   # 跑只读，遇写操作询问
 ./bin/guard run --mode auto     "重启 nginx deployment"   # 读写都跑
 ```
 
 权限分级（`--mode`）与 Policy Guard 判定组合决定行为：
 
-| 判定 \ 模式         | `plan` | `readonly` | `auto` | `full` |
-|---------------------|:------:|:----------:|:------:|:------:|
-| allow（只读）       | 展示   | 执行       | 执行   | 执行   |
-| confirm（变更）     | 展示   | 询问       | 执行   | 执行   |
-| block（危险）       | 展示   | 拒绝       | 拒绝   | 执行 ⚠ |
+| 判定 \ 模式         | `readonly` | `auto` | `full` |
+|---------------------|:----------:|:------:|:------:|
+| allow（只读）       | 执行       | 执行   | 执行   |
+| confirm（变更）     | 询问       | 执行   | 执行   |
+| block（危险）       | 拒绝       | 拒绝   | 执行 ⚠ |
 
 ### 模式二 —— MCP 服务（云端编排 + 端侧安全执行）
 
@@ -136,7 +136,7 @@ go build -o bin/guard ./cmd/guard
 ## 安全模型
 
 - **Policy Guard**：每条指令执行前都被分级 `allow` / `confirm` / `block`；未命中任何规则默认 `confirm`——未知动作永远需要人确认。
-- **权限分级**：Claude Code / Codex 式的 `--mode`（`plan`/`readonly`/`auto`/`full`）与判定组合决定 执行/询问/拒绝。CLI 默认 `plan`，MCP 默认 `readonly`。
+- **权限分级**：Claude Code / Codex 式的 `--mode`（`readonly`/`auto`/`full`）与判定组合决定 执行/询问/拒绝。CLI 与 MCP 默认均为 `readonly`：只读执行、变更询问、危险拒绝。
 - **脱敏（desensitization）**：任何可能离开本机的执行输出先经脱敏——私钥、JWT、云厂商 key、kubeconfig 密钥、URL 里的凭证、邮箱、长 base64 块统统抹去。在云端规划 loop 下，隐私承诺是**"只出脱敏数据"**，而 Redactor 就是这条保证的命门。
 - **意图降级**：本地模型给不出计划时，**绝不**把原始任务静默升级到云端，而是把降级显式抛给你/客户端。
 - **本地 RAG 不外泄**：只把 `current-context` 等非密钥标识注入提示词，凭证与文件内容从不读取或外传。

@@ -47,18 +47,18 @@ go build -o bin/guard ./cmd/guard
 # screen a single command against the security fence
 ./bin/guard policy check "kubectl delete pods --all"   # -> BLOCK
 
-# plan-only by default; raise the autonomy level to act (Claude-Code/Codex-style tiers)
+# readonly by default (runs reads, asks on writes); raise the tier to act
 ./bin/guard run --mode readonly "show logs for the payment service"   # runs reads, asks on writes
 ./bin/guard run --mode auto     "restart the nginx deployment"        # runs reads + writes
 ```
 
-Permission tiers (`--mode`) combine with the Policy Guard verdict:
+Permission tiers (`--mode`, Claude-Code/Codex-style) combine with the Policy Guard verdict:
 
-| verdict \ mode      | `plan` | `readonly` | `auto` | `full` |
-|---------------------|:------:|:----------:|:------:|:------:|
-| allow (read-only)   | show   | run        | run    | run    |
-| confirm (mutating)  | show   | ask        | run    | run    |
-| block (dangerous)   | show   | refuse     | refuse | run ⚠  |
+| verdict \ mode      | `readonly` | `auto` | `full` |
+|---------------------|:----------:|:------:|:------:|
+| allow (read-only)   | run        | run    | run    |
+| confirm (mutating)  | ask        | run    | run    |
+| block (dangerous)   | refuse     | refuse | run ⚠  |
 
 ### Mode 2 — MCP server (cloud orchestrator + on-device safe execution)
 
@@ -144,9 +144,9 @@ Switch via `--provider` or `SENTINEL_PROVIDER`. All speak OpenAI-compatible `/v1
 
 - **Policy Guard**: every command is graded `allow` / `confirm` / `block` before it can run.
   Anything matching no rule defaults to `confirm` — unknown actions always need a human.
-- **Permission tiers**: a Claude-Code/Codex-style `--mode` (`plan`/`readonly`/`auto`/`full`)
-  combines with the verdict to decide run / ask / refuse. Default CLI mode is `plan`; default
-  MCP mode is `readonly`.
+- **Permission tiers**: a Claude-Code/Codex-style `--mode` (`readonly`/`auto`/`full`)
+  combines with the verdict to decide run / ask / refuse. Default is `readonly` (CLI and MCP):
+  read-only commands run, mutations ask, dangerous commands are refused.
 - **Redaction (desensitization)**: any executed output that may leave the machine is sanitized
   first — private keys, JWTs, cloud keys, kubeconfig secrets, credentials in URLs, emails, and
   long base64 blobs are stripped. In the cloud-planner loop the privacy guarantee is **"only

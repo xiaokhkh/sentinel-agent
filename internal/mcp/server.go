@@ -201,11 +201,7 @@ func (s *Server) toolExecuteStep(args json.RawMessage) map[string]any {
 	switch permission.Decide(v.Decision, s.mode) {
 	case permission.Refuse:
 		res["status"] = "refused"
-		if v.Decision == policy.Block {
-			res["reason"] = "blocked by policy: " + v.Reason
-		} else {
-			res["reason"] = "server is in plan mode; nothing is executed"
-		}
+		res["reason"] = "blocked by policy: " + v.Reason
 	case permission.Ask:
 		res["status"] = "approval_required"
 		res["reason"] = "mutating command not auto-executed; approve via your MCP client or run it through the guard CLI"

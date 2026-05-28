@@ -48,11 +48,7 @@ func (e *Executor) RunPlan(plan *engine.Plan, guard *policy.Guard) []Result {
 
 		switch permission.Decide(v.Decision, e.Mode) {
 		case permission.Refuse:
-			if v.Decision == policy.Block {
-				fmt.Fprintf(e.Out, "    -> BLOCKED by policy (%s); not executed\n", v.Rule)
-			} else {
-				fmt.Fprintln(e.Out, "    -> plan mode: not executed (use --mode readonly|auto to run)")
-			}
+			fmt.Fprintf(e.Out, "    -> BLOCKED by policy (%s); not executed\n", v.Rule)
 			r.Skipped = true
 		case permission.Ask:
 			if e.confirm() {

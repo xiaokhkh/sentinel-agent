@@ -14,7 +14,6 @@ import (
 type Mode string
 
 const (
-	Plan     Mode = "plan"     // never execute; show/return the plan only
 	ReadOnly Mode = "readonly" // auto-run read-only; ask on mutations; refuse blocked
 	Auto     Mode = "auto"     // auto-run read-only + mutating; refuse blocked
 	Full     Mode = "full"     // run everything, including blocked (dangerous)
@@ -33,8 +32,6 @@ const (
 // default for autonomous (MCP) operation.
 func ParseMode(s string) (Mode, bool) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "plan":
-		return Plan, true
 	case "", "readonly", "read-only":
 		return ReadOnly, true
 	case "auto", "auto-edit":
@@ -49,8 +46,6 @@ func ParseMode(s string) (Mode, bool) {
 // Decide maps a guard verdict and mode to an execution outcome.
 func Decide(d policy.Decision, m Mode) Outcome {
 	switch m {
-	case Plan:
-		return Refuse
 	case Full:
 		return Run
 	case Auto:

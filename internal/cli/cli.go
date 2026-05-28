@@ -64,7 +64,7 @@ func cmdRun(args []string) int {
 	provider := fs.String("provider", cfg.Provider, "inference provider: mock|ollama|llamacpp|mlx")
 	baseURL := fs.String("base-url", cfg.BaseURL, "OpenAI-compatible endpoint base URL")
 	model := fs.String("model", cfg.Model, "model name/tag")
-	mode := fs.String("mode", "plan", "execution mode: plan|readonly|auto|full")
+	mode := fs.String("mode", "readonly", "execution mode: readonly|auto|full")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -77,7 +77,7 @@ func cmdRun(args []string) int {
 
 	pmode, ok := permission.ParseMode(*mode)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "error: unknown mode %q (plan|readonly|auto|full)\n", *mode)
+		fmt.Fprintf(os.Stderr, "error: unknown mode %q (readonly|auto|full)\n", *mode)
 		return 2
 	}
 
@@ -135,9 +135,6 @@ func cmdRun(args []string) int {
 		}
 	}
 	fmt.Printf("\nsummary: %d ran, %d blocked, %d skipped\n", ran, blocked, skipped)
-	if pmode == permission.Plan {
-		fmt.Println("(plan mode — re-run with --mode readonly|auto to apply)")
-	}
 	return 0
 }
 
@@ -207,8 +204,8 @@ run flags:
   --provider   mock|ollama|llamacpp|mlx   inference backend (default: ollama)
   --base-url   <url>                      OpenAI-compatible endpoint base URL
   --model      <tag>                      model name/tag
-  --mode       plan|readonly|auto|full    autonomy level (default: plan)
-                                            plan=show only; readonly=run reads, ask on writes;
+  --mode       readonly|auto|full         autonomy level (default: readonly)
+                                            readonly=run reads, ask on writes;
                                             auto=run reads+writes; full=run everything (dangerous)
 
 examples:

@@ -12,8 +12,6 @@ func TestDecide(t *testing.T) {
 		m    Mode
 		want Outcome
 	}{
-		{policy.Allow, Plan, Refuse},
-		{policy.Confirm, Plan, Refuse},
 		{policy.Allow, ReadOnly, Run},
 		{policy.Confirm, ReadOnly, Ask},
 		{policy.Block, ReadOnly, Refuse},
@@ -37,7 +35,7 @@ func TestParseMode(t *testing.T) {
 	if _, ok := ParseMode("nope"); ok {
 		t.Error("ParseMode(nope) should fail")
 	}
-	for _, s := range []string{"plan", "readonly", "auto", "full"} {
+	for _, s := range []string{"readonly", "auto", "full"} {
 		if _, ok := ParseMode(s); !ok {
 			t.Errorf("ParseMode(%q) should succeed", s)
 		}
