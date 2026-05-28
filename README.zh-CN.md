@@ -27,6 +27,15 @@
 云端大模型很强，但越来越多团队禁止把 K8s 配置、私有代码、数据库凭证贴进去。Sentinel-Agent 就是那个
 **合规的出口**：高层推理放在任何你信任的地方，而特权操作交给端侧模型在安全围栏后完成。
 
+## 演示
+
+<p align="center">
+  <img src="docs/assets/demo.gif" width="760" alt="guard 诊断真实 minikube 集群">
+</p>
+
+自然语言任务 → 端侧 LFM2.5 → Policy Guard → 对真实 minikube 集群执行 `kubectl`；破坏性命令一律拒绝。
+（[如何复现](docs/demo.tape)）
+
 ## 安装（macOS 优先）
 
 开箱即用：装好小巧的 CLI、装一次推理引擎，然后直接跑——端侧模型首次运行时自动下载。无需 Ollama，无需手动折腾模型。

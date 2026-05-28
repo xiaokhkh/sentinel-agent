@@ -30,6 +30,15 @@ private code, or DB credentials into them. Sentinel-Agent is the **compliant exi
 high-level reasoning wherever you like, but let an on-device model do the privileged work behind
 a security fence.
 
+## Demo
+
+<p align="center">
+  <img src="docs/assets/demo.gif" width="760" alt="guard diagnosing a live minikube cluster">
+</p>
+
+A natural-language task → on-device LFM2.5 → Policy Guard → live `kubectl` against a real minikube
+cluster; destructive commands are refused. ([reproduce it](docs/demo.tape))
+
 ## Install (macOS-first)
 
 Out-of-the-box: install the small CLI, install the engine once, then just run — the on-device
