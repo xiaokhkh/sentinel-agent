@@ -57,6 +57,9 @@ func TestParsePlanDowngradeOnGarbage(t *testing.T) {
 	if _, err := parsePlan(`{"actions":[]}`, "test", "t"); !errors.Is(err, ErrIntentDowngrade) {
 		t.Fatalf("expected downgrade on empty actions, got %v", err)
 	}
+	if _, err := parsePlan(`{"actions":[{"kind":"shell","command":" "}]} `, "test", "t"); !errors.Is(err, ErrIntentDowngrade) {
+		t.Fatalf("expected downgrade on empty command, got %v", err)
+	}
 	plan, err := parsePlan(`prefix {"actions":[{"kind":"shell","command":"ls"}]} suffix`, "test", "t")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

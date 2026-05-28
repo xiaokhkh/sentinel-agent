@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -27,15 +28,22 @@ func NewProvider(cfg ProviderConfig) (Inferencer, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = defaultTimeout
 	}
+	useSchema := os.Getenv("SENTINEL_NO_SCHEMA") != "1"
 	switch strings.ToLower(strings.TrimSpace(cfg.Name)) {
 	case "", "mock":
 		return NewMockProvider(), nil
 	case "ollama":
-		return NewOllamaProvider(cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Timeout), nil
+		p := NewOllamaProvider(cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Timeout)
+		p.useSchema = useSchema
+		return p, nil
 	case "llamacpp", "llama.cpp", "llama":
-		return NewLlamaCppProvider(cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Timeout), nil
+		p := NewLlamaCppProvider(cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Timeout)
+		p.useSchema = useSchema
+		return p, nil
 	case "mlx":
-		return NewMLXProvider(cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Timeout), nil
+		p := NewMLXProvider(cfg.BaseURL, cfg.APIKey, cfg.Model, cfg.Timeout)
+		p.useSchema = useSchema
+		return p, nil
 	default:
 		return nil, fmt.Errorf("unknown provider %q (supported: mock, ollama, llamacpp, mlx)", cfg.Name)
 	}

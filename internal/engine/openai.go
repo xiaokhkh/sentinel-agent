@@ -16,17 +16,18 @@ import (
 // llama-server, mlx_lm.server, ...). Concrete providers differ only by their
 // default base URL and model tag.
 type httpProvider struct {
-	name    string
-	baseURL string
-	apiKey  string
-	model   string
-	timeout time.Duration
+	name      string
+	baseURL   string
+	apiKey    string
+	model     string
+	timeout   time.Duration
+	useSchema bool
 }
 
 func (p *httpProvider) Name() string { return p.name }
 
 func (p *httpProvider) Plan(ctx context.Context, task string, rag *LocalContext) (*Plan, error) {
-	raw, err := openAIChat(ctx, p.baseURL, p.apiKey, p.model, planSystemPrompt, buildUserPrompt(task, rag), p.timeout)
+	raw, err := openAIChat(ctx, p.baseURL, p.apiKey, p.model, planSystemPrompt, buildUserPrompt(task, rag), p.timeout, p.useSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -42,9 +43,17 @@ Rules:
 - You are given the agent's local context/memory. If the task requires access details that are MISSING from it and you cannot proceed safely (for example you need a kubeconfig path / context / namespace, or a connection target, but none is provided), DO NOT guess or fabricate them.
 - In that case return ONLY: {"needs_input":{"prompt":"<one clear question to ask the user>","key":"<dotted config key to save the answer, e.g. kubernetes.kubeconfig, or empty string>"}}
 - Otherwise return the actions object as before.
+- Every action MUST have a non-empty command. Never output an action with an empty command.
 - Prefer read-only/diagnostic commands. Never add destructive flags (--all, --force, drop, truncate, delete) unless the user explicitly requested them.
 - Exactly one command per action. Do not chain commands with && or ;.
-- If the task cannot be mapped to safe local commands, return {"actions":[]}.`
+- If the task cannot be mapped to safe local commands, return {"actions":[]}.
+
+Examples:
+- User: list pods in default
+  Output: {"actions":[{"kind":"kubectl","command":"kubectl get pods -n default","explanation":"list pods"}]}
+- Local context: no kubeconfig
+  User: check my k8s pods
+  Output: {"needs_input":{"prompt":"I don't have a kubeconfig. What's the path to your kubeconfig?","key":"kubernetes.kubeconfig"}}`
 
 func buildUserPrompt(task string, rag *LocalContext) string {
 	ctxLine := "none"
@@ -62,9 +71,10 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
+	Model          string        `json:"model"`
+	Messages       []chatMessage `json:"messages"`
+	Stream         bool          `json:"stream"`
+	ResponseFormat any           `json:"response_format,omitempty"`
 }
 
 type chatResponse struct {
@@ -73,15 +83,66 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
-func openAIChat(ctx context.Context, baseURL, apiKey, model, system, user string, timeout time.Duration) (string, error) {
-	body, err := json.Marshal(chatRequest{
+func newChatRequest(model, system, user string, useSchema bool) chatRequest {
+	req := chatRequest{
 		Model: model,
 		Messages: []chatMessage{
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},
 		},
 		Stream: false,
-	})
+	}
+	if useSchema {
+		req.ResponseFormat = planResponseFormat()
+	}
+	return req
+}
+
+func planResponseFormat() any {
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "sentinel_plan",
+			"strict": false,
+			"schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"actions": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"kind": map[string]any{
+									"type": "string",
+									"enum": []string{"kubectl", "shell"},
+								},
+								"command": map[string]any{
+									"type":      "string",
+									"minLength": 1,
+								},
+								"explanation": map[string]any{
+									"type": "string",
+								},
+							},
+							"required": []string{"command", "explanation"},
+						},
+					},
+					"needs_input": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"prompt": map[string]any{"type": "string"},
+							"key":    map[string]any{"type": "string"},
+						},
+						"required": []string{"prompt"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func openAIChat(ctx context.Context, baseURL, apiKey, model, system, user string, timeout time.Duration, useSchema bool) (string, error) {
+	body, err := json.Marshal(newChatRequest(model, system, user, useSchema))
 	if err != nil {
 		return "", err
 	}
@@ -143,6 +204,12 @@ func parsePlan(raw, source, task string) (*Plan, error) {
 		return nil, ErrIntentDowngrade
 	}
 	for i := range parsed.Actions {
+		parsed.Actions[i].Kind = ActionKind(strings.TrimSpace(string(parsed.Actions[i].Kind)))
+		parsed.Actions[i].Command = strings.TrimSpace(parsed.Actions[i].Command)
+		parsed.Actions[i].Explanation = strings.TrimSpace(parsed.Actions[i].Explanation)
+		if parsed.Actions[i].Command == "" {
+			return nil, fmt.Errorf("%w: model returned an action with an empty command", ErrIntentDowngrade)
+		}
 		if parsed.Actions[i].Kind == "" {
 			parsed.Actions[i].Kind = ActionShell
 		}

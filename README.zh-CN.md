@@ -42,7 +42,9 @@ brew install llama.cpp
 guard run "诊断 default 命名空间里未就绪的 pod"
 ```
 
-`guard` 会替你启动 `llama-server -hf LiquidAI/LFM2.5-1.2B-Instruct-GGUF`（由 llama.cpp 下载并缓存 GGUF）。管理命令：
+`guard` 会自己下载 GGUF——**走代理**（Go HTTP 尊重 `HTTPS_PROXY`，不像 llama.cpp 的 `-hf` 会无视代理）——
+存到 `~/.sentinel/models/`，再以 `llama-server -m ...` 绑定 `127.0.0.1` 启动。在墙内可设 `HF_ENDPOINT` 用镜像，
+或直接靠你的代理。量化档用 `SENTINEL_QUANT` 选（默认 `Q4_K_M`）。管理命令：
 
 ```bash
 guard model    # 查看 模型 / 引擎 / 端点 状态

@@ -6,12 +6,12 @@ import "time"
 // want a single static binary with no background daemon and full control over
 // the GGUF model file — a smaller, more auditable footprint for an offline
 // security tool.
-func NewLlamaCppProvider(baseURL, apiKey, model string, timeout time.Duration) Inferencer {
+func NewLlamaCppProvider(baseURL, apiKey, model string, timeout time.Duration) *httpProvider {
 	if baseURL == "" {
-		baseURL = "http://localhost:8080/v1"
+		baseURL = "http://127.0.0.1:8080/v1"
 	}
 	if model == "" {
 		model = defaultModel
 	}
-	return &httpProvider{name: "llamacpp", baseURL: baseURL, apiKey: apiKey, model: model, timeout: timeout}
+	return &httpProvider{name: "llamacpp", baseURL: baseURL, apiKey: apiKey, model: model, timeout: timeout, useSchema: true}
 }

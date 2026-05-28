@@ -46,8 +46,10 @@ brew install llama.cpp
 guard run "diagnose not-ready pods in the default namespace"
 ```
 
-`guard` starts `llama-server -hf LiquidAI/LFM2.5-1.2B-Instruct-GGUF` for you (llama.cpp downloads
-and caches the GGUF). Manage it with:
+`guard` downloads the GGUF itself — **proxy-aware** (Go HTTP honors `HTTPS_PROXY`, unlike llama.cpp's
+`-hf`) — into `~/.sentinel/models/`, then runs `llama-server -m ...` bound to `127.0.0.1`. Behind a
+firewall, set a mirror via `HF_ENDPOINT` or just rely on your proxy. Pick a quant with `SENTINEL_QUANT`
+(default `Q4_K_M`). Manage it with:
 
 ```bash
 guard model    # show model / engine / endpoint status

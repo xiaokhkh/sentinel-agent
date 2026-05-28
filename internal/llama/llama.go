@@ -97,8 +97,12 @@ func RunForeground(model, baseURL string) error {
 	if err != nil {
 		return err
 	}
+	localPath, err := ResolveModel(model)
+	if err != nil {
+		return err
+	}
 	host, port := hostPort(baseURL)
-	cmd := exec.Command(bin, "-hf", model, "--host", host, "--port", port, "-ngl", "999")
+	cmd := exec.Command(bin, "-m", localPath, "--host", host, "--port", port, "-ngl", "999")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -124,6 +128,10 @@ func EnsureServer(model, baseURL string, timeout time.Duration) error {
 	if err != nil {
 		return err
 	}
+	localPath, err := ResolveModel(model)
+	if err != nil {
+		return err
+	}
 
 	host, port := hostPort(baseURL)
 	logFile, err := os.OpenFile(logPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -132,8 +140,8 @@ func EnsureServer(model, baseURL string, timeout time.Duration) error {
 	}
 	defer logFile.Close()
 
-	fmt.Fprintln(os.Stderr, "starting local llama-server (first run downloads the model, this may take a while)...")
-	cmd := exec.Command(bin, "-hf", model, "--host", host, "--port", port, "-ngl", "999")
+	fmt.Fprintln(os.Stderr, "starting local llama-server...")
+	cmd := exec.Command(bin, "-m", localPath, "--host", host, "--port", port, "-ngl", "999")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
