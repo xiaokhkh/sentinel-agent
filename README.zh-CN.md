@@ -172,6 +172,7 @@ Skill 使用的 CLI 调用：`guard skill context`、`guard skill plan`、`guard
 - **Policy Guard**：每条指令执行前都被分级 `allow` / `confirm` / `block`；未命中任何规则默认 `confirm`——未知动作永远需要人确认。
 - **权限分级**：Claude Code / Codex 式的 `--mode`（`readonly`/`auto`/`full`）与判定组合决定 执行/询问/拒绝。CLI 与 Skill 默认均为 `readonly`：只读执行、变更询问、危险拒绝。
 - **脱敏（desensitization）**：任何可能离开本机的执行输出先经脱敏——私钥、JWT、云厂商 key、kubeconfig 密钥、URL 里的凭证、邮箱、长 base64 块统统抹去。在云端规划 loop 下，隐私承诺是**"只出脱敏数据"**，而 Redactor 就是这条保证的命门。
+- **端侧语义安全层**（可选，`SENTINEL_SEMANTIC=1`）：在正则基线**之上**叠一层本地 LLM——抓正则漏掉的密钥/PII（如裸 `ghp_…`/`sk_live_…` token），并对**未命中规则的破坏性命令**判定风险（如 `terraform destroy` → 拦截）。这是**只能在端侧做**的安全活：要"看着原始数据决定哪里该藏"，本就不能交给云端模型。只用本地模型、fail-safe（出错退回正则）、且只加严不放松。
 - **意图降级**：本地模型给不出计划时，**绝不**把原始任务静默升级到云端，而是把降级显式抛给你/客户端。
 - **本地 RAG 不外泄**：只把 `current-context` 等非密钥标识注入提示词，凭证与文件内容从不读取或外传。
 

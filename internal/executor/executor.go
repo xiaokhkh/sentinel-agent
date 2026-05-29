@@ -38,11 +38,19 @@ type Result struct {
 	Err     error
 }
 
+// Evaluator classifies a command before execution.
+type Evaluator func(command string) policy.Verdict
+
 // RunPlan evaluates and (per mode) runs every action in order.
 func (e *Executor) RunPlan(plan *engine.Plan, guard *policy.Guard) []Result {
+	return e.RunPlanWithEvaluator(plan, guard.Evaluate)
+}
+
+// RunPlanWithEvaluator evaluates and (per mode) runs every action in order.
+func (e *Executor) RunPlanWithEvaluator(plan *engine.Plan, evaluate Evaluator) []Result {
 	results := make([]Result, 0, len(plan.Actions))
 	for i, a := range plan.Actions {
-		v := guard.Evaluate(a.Command)
+		v := evaluate(a.Command)
 		r := Result{Action: a, Verdict: v}
 		e.printAction(i+1, a, v)
 

@@ -26,6 +26,7 @@ import (
 	"github.com/xiaokhkh/sentinel-agent/internal/permission"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
 	"github.com/xiaokhkh/sentinel-agent/internal/redact"
+	"github.com/xiaokhkh/sentinel-agent/internal/semantic"
 	"github.com/xiaokhkh/sentinel-agent/internal/skills"
 
 	// Register capability packs for `guard skills`.
@@ -194,8 +195,15 @@ func cmdRun(args []string) int {
 
 	fmt.Printf("\ngenerated plan (%d action(s)) [mode=%s]:\n\n", len(plan.Actions), pmode)
 	guard := policy.New()
+	sem := semanticForConfig(withProviderConfig(cfg, *provider, *baseURL, *model))
+	evaluate := guard.Evaluate
+	if sem != nil {
+		evaluate = func(command string) policy.Verdict {
+			return sem.ClassifyCommand(context.Background(), command, guard.Evaluate(command))
+		}
+	}
 	exc := executor.New(pmode)
-	results := exc.RunPlan(plan, guard)
+	results := exc.RunPlanWithEvaluator(plan, evaluate)
 
 	var ran, blocked, skipped int
 	for _, r := range results {
@@ -294,7 +302,12 @@ func cmdPolicy(args []string) int {
 		return 2
 	}
 
+	cfg := config.Load()
+	sem := semanticForConfig(cfg)
 	v := policy.New().Evaluate(command)
+	if sem != nil {
+		v = sem.ClassifyCommand(context.Background(), command, v)
+	}
 	fmt.Printf("%s\n", command)
 	fmt.Printf("  decision: %s  risk: %s  rule: %s\n", strings.ToUpper(string(v.Decision)), v.Risk, v.Rule)
 	fmt.Printf("  reason:   %s\n", v.Reason)
@@ -431,11 +444,15 @@ func cmdSkillPlan(args []string) int {
 	}
 
 	guard := policy.New()
+	sem := semanticForConfig(withProviderConfig(cfg, *provider, *baseURL, *model))
 	for _, ac := range plan.Actions {
 		v := guard.Evaluate(ac.Command)
+		if sem != nil {
+			v = sem.ClassifyCommand(context.Background(), ac.Command, v)
+		}
 		out.Actions = append(out.Actions, screened{
 			Kind:        string(ac.Kind),
-			Command:     redact.Redact(ac.Command),
+			Command:     redactWithSemantic(sem, ac.Command),
 			Explanation: ac.Explanation,
 			Decision:    string(v.Decision),
 			Risk:        string(v.Risk),
@@ -465,9 +482,13 @@ func cmdSkillExec(args []string) int {
 		return 2
 	}
 
+	sem := semanticForConfig(cfg)
 	v := policy.New().Evaluate(command)
+	if sem != nil {
+		v = sem.ClassifyCommand(context.Background(), command, v)
+	}
 	res := map[string]any{
-		"command":  redact.Redact(command),
+		"command":  redactWithSemantic(sem, command),
 		"decision": v.Decision,
 		"risk":     v.Risk,
 		"rule":     v.Rule,
@@ -492,7 +513,7 @@ func cmdSkillExec(args []string) int {
 			text = text[:skillMaxOutputBytes] + "\n...[truncated]"
 		}
 		res["status"] = "executed"
-		res["output"] = redact.Redact(text)
+		res["output"] = redactWithSemantic(sem, text)
 		if err != nil {
 			res["error"] = err.Error()
 			writeJSON(res)
@@ -513,14 +534,40 @@ func cmdSkillPolicy(args []string) int {
 		fmt.Fprintln(os.Stderr, `usage: guard skill policy "<command>"`)
 		return 2
 	}
+	cfg := config.Load()
+	sem := semanticForConfig(cfg)
 	v := policy.New().Evaluate(command)
+	if sem != nil {
+		v = sem.ClassifyCommand(context.Background(), command, v)
+	}
 	return writeJSON(map[string]any{
-		"command":  redact.Redact(command),
+		"command":  redactWithSemantic(sem, command),
 		"decision": v.Decision,
 		"risk":     v.Risk,
 		"rule":     v.Rule,
 		"reason":   v.Reason,
 	})
+}
+
+func semanticForConfig(cfg config.Config) *semantic.Classifier {
+	if !semantic.Enabled() {
+		return nil
+	}
+	return semantic.New(cfg)
+}
+
+func withProviderConfig(cfg config.Config, provider, baseURL, model string) config.Config {
+	cfg.Provider = provider
+	cfg.BaseURL = baseURL
+	cfg.Model = model
+	return cfg
+}
+
+func redactWithSemantic(c *semantic.Classifier, text string) string {
+	if c == nil {
+		return redact.Redact(text)
+	}
+	return c.RedactText(context.Background(), text)
 }
 
 func writeJSON(v any) int {

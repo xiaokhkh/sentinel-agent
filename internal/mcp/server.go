@@ -23,6 +23,7 @@ import (
 	"github.com/xiaokhkh/sentinel-agent/internal/permission"
 	"github.com/xiaokhkh/sentinel-agent/internal/policy"
 	"github.com/xiaokhkh/sentinel-agent/internal/redact"
+	"github.com/xiaokhkh/sentinel-agent/internal/semantic"
 	"github.com/xiaokhkh/sentinel-agent/internal/skills"
 )
 
@@ -175,8 +176,12 @@ func (s *Server) toolRunTask(args json.RawMessage) map[string]any {
 		Note: "call execute_step to run an action; mutating steps may need approval per the server mode",
 	}
 
+	sem := semanticForConfig(s.cfg)
 	for _, ac := range plan.Actions {
 		v := s.guard.Evaluate(ac.Command)
+		if sem != nil {
+			v = sem.ClassifyCommand(context.Background(), ac.Command, v)
+		}
 		out.Actions = append(out.Actions, screened{
 			Kind: string(ac.Kind), Command: ac.Command, Explanation: ac.Explanation,
 			Decision: string(v.Decision), Risk: string(v.Risk), Rule: v.Rule,
@@ -200,7 +205,11 @@ func (s *Server) toolExecuteStep(args json.RawMessage) map[string]any {
 		return toolError("missing required argument: command")
 	}
 
+	sem := semanticForConfig(s.cfg)
 	v := s.guard.Evaluate(a.Command)
+	if sem != nil {
+		v = sem.ClassifyCommand(context.Background(), a.Command, v)
+	}
 	res := map[string]any{
 		"command": a.Command, "decision": v.Decision, "risk": v.Risk,
 		"rule": v.Rule, "mode": s.mode,
@@ -220,7 +229,7 @@ func (s *Server) toolExecuteStep(args json.RawMessage) map[string]any {
 			text = text[:maxOutputBytes] + "\n...[truncated]"
 		}
 		res["status"] = "executed"
-		res["output"] = redact.Redact(text) // desensitized before leaving the machine
+		res["output"] = redactWithSemantic(sem, text) // desensitized before leaving the machine
 		if err != nil {
 			res["error"] = err.Error()
 		}
@@ -236,7 +245,11 @@ func (s *Server) toolPolicyCheck(args json.RawMessage) map[string]any {
 	if a.Command == "" {
 		return toolError("missing required argument: command")
 	}
+	sem := semanticForConfig(s.cfg)
 	v := s.guard.Evaluate(a.Command)
+	if sem != nil {
+		v = sem.ClassifyCommand(context.Background(), a.Command, v)
+	}
 	return toolJSON(map[string]any{
 		"command": a.Command, "decision": v.Decision, "risk": v.Risk,
 		"rule": v.Rule, "reason": v.Reason,
@@ -273,4 +286,18 @@ func (s *Server) write(v any) {
 	b, _ := json.Marshal(v)
 	s.out.Write(b)
 	s.out.Write([]byte("\n"))
+}
+
+func semanticForConfig(cfg config.Config) *semantic.Classifier {
+	if !semantic.Enabled() {
+		return nil
+	}
+	return semantic.New(cfg)
+}
+
+func redactWithSemantic(c *semantic.Classifier, text string) string {
+	if c == nil {
+		return redact.Redact(text)
+	}
+	return c.RedactText(context.Background(), text)
 }

@@ -194,6 +194,11 @@ Switch via `--provider` or `SENTINEL_PROVIDER`. All speak OpenAI-compatible `/v1
   first — private keys, JWTs, cloud keys, kubeconfig secrets, credentials in URLs, emails, and
   long base64 blobs are stripped. In the cloud-planner loop the privacy guarantee is **"only
   desensitized data leaves"**, and the redactor is the linchpin that enforces it.
+- **On-device semantic safety** (opt-in, `SENTINEL_SEMANTIC=1`): a local-LLM pass on top of the
+  regex baseline — it catches secrets/PII the regex misses (e.g. a bare `ghp_…`/`sk_live_…` token)
+  and flags destructive commands that match no rule (e.g. `terraform destroy` → blocked). This is the
+  one safety job that **can only run on-device**: analyzing raw data to decide what to hide can't be
+  delegated to a cloud model. Local-only, fail-safe (falls back to regex), and only ever stricter.
 - **Intent downgrade**: if the local model can't produce a plan, Sentinel **never** silently
   escalates the raw task off-device — it surfaces the downgrade to you/the client instead.
 - **Local RAG never exfiltrates**: only non-secret identifiers (e.g. the current kube context)
