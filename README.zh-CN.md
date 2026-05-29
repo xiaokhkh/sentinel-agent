@@ -36,9 +36,10 @@
   <img src="docs/assets/demo-cli.gif" width="760" alt="guard CLI 对接真实 minikube 集群">
 </p>
 
-**Sentinel Skill** —— 云端 Agent 通过 `guard skill`（JSON 协议）排查一次真实生产故障：`shop`
-命名空间里 `payment-api` 正在 CrashLoopBackOff。Agent 读取非密钥上下文、端侧规划、执行只读命令并回传
-脱敏 JSON（定位到根因——缺少环境变量）、补救命令被门控在人工审批后、批量删除被直接拦截。
+**Sentinel Skill** —— 云端 Agent 通过 `guard skill`（JSON 协议）排查**并修复**一次真实生产故障：`shop`
+命名空间里 `payment-api` 正在 CrashLoopBackOff。Agent 读取非密钥上下文、端侧规划、执行只读命令定位根因
+（缺少环境变量）、提出修复命令 → **readonly 模式拒绝自动变更、要求人工审批** → 审批后以 `auto` 模式执行修复
+→ pod 恢复 Running。全程批量删除仍被拦截。
 
 <p align="center">
   <img src="docs/assets/demo-skill.gif" width="760" alt="Sentinel Skill 排查真实生产故障">
