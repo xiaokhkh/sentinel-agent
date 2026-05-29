@@ -39,11 +39,13 @@ minikube cluster (the `ImagePullBackOff` pod is real); destructive commands are 
   <img src="docs/assets/demo-cli.gif" width="760" alt="guard CLI against a live minikube cluster">
 </p>
 
-**Sentinel Skill** — a cloud agent gets a safe local ops capability through `guard skill`: it plans
-on-device, runs allowed read-only commands with redacted JSON output, and blocks destructive commands.
+**Sentinel Skill** — a cloud agent triages a real production incident through `guard skill` (JSON
+protocol): a `payment-api` deploy is crash-looping in the `shop` namespace. The agent reads non-secret
+context, plans on-device, runs read-only commands with redacted JSON output (surfacing the root cause —
+a missing env var), gets a remediation gated behind human approval, and is blocked from a bulk delete.
 
 <p align="center">
-  <img src="docs/assets/demo-skill.gif" width="760" alt="Sentinel Skill using local guarded execution">
+  <img src="docs/assets/demo-skill.gif" width="760" alt="Sentinel Skill triaging a live production incident">
 </p>
 
 <sub>Reproduce: <a href="docs/demo-cli.sh">docs/demo-cli.sh</a> · <a href="docs/demo-skill.sh">docs/demo-skill.sh</a> (recorded with asciinema + agg)</sub>

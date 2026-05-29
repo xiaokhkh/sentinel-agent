@@ -36,11 +36,12 @@
   <img src="docs/assets/demo-cli.gif" width="760" alt="guard CLI 对接真实 minikube 集群">
 </p>
 
-**Sentinel Skill** —— 云端 Agent 通过 `guard skill` 获得一个安全的本地运维能力：端侧规划、
-只读命令回传脱敏 JSON、破坏性命令被拦截。
+**Sentinel Skill** —— 云端 Agent 通过 `guard skill`（JSON 协议）排查一次真实生产故障：`shop`
+命名空间里 `payment-api` 正在 CrashLoopBackOff。Agent 读取非密钥上下文、端侧规划、执行只读命令并回传
+脱敏 JSON（定位到根因——缺少环境变量）、补救命令被门控在人工审批后、批量删除被直接拦截。
 
 <p align="center">
-  <img src="docs/assets/demo-skill.gif" width="760" alt="Sentinel Skill 使用本地受控执行">
+  <img src="docs/assets/demo-skill.gif" width="760" alt="Sentinel Skill 排查真实生产故障">
 </p>
 
 <sub>复现：<a href="docs/demo-cli.sh">docs/demo-cli.sh</a> · <a href="docs/demo-skill.sh">docs/demo-skill.sh</a>（asciinema + agg 录制）</sub>
