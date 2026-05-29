@@ -39,12 +39,12 @@ minikube cluster (the `ImagePullBackOff` pod is real); destructive commands are 
   <img src="docs/assets/demo-cli.gif" width="760" alt="guard CLI against a live minikube cluster">
 </p>
 
-**Sentinel Skill** — a cloud agent triages **and fixes** a real production incident through `guard
-skill` (JSON protocol): a `payment-api` deploy is crash-looping in the `shop` namespace. The agent
-reads non-secret context, plans on-device, runs read-only commands (surfacing the root cause — a
-missing env var), proposes the fix → **read-only mode refuses to auto-mutate and requires human
-approval** → after approval the fix runs in `auto` mode → pods recover to Running. A bulk delete stays
-blocked throughout.
+**Sentinel Skill** — a cloud agent delegates one task and the **on-device agent** fixes a real
+production incident (`payment-api` crash-looping in `shop`). `guard skill solve` runs a bounded,
+**autonomous read-only investigation loop on-device**, returns desensitized evidence and the root
+cause (a missing env var); the mutating fix is **refused in read-only mode and gated on human
+approval**, then applied in `auto` mode → pods recover to Running. A bulk delete stays blocked
+throughout.
 
 <p align="center">
   <img src="docs/assets/demo-skill.gif" width="760" alt="Sentinel Skill triaging a live production incident">
