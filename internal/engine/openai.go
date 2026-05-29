@@ -34,6 +34,18 @@ func (p *httpProvider) Plan(ctx context.Context, task string, rag *LocalContext)
 	return parsePlan(raw, p.name, task)
 }
 
+func (p *httpProvider) PlanNextStep(ctx context.Context, task string, rag *LocalContext, observations []string) (*Step, error) {
+	var responseFormat any
+	if p.useSchema {
+		responseFormat = stepResponseFormat()
+	}
+	raw, err := openAIChatWithResponseFormat(ctx, p.baseURL, p.apiKey, p.model, stepSystemPrompt, buildStepUserPrompt(task, rag, observations), p.timeout, responseFormat)
+	if err != nil {
+		return nil, err
+	}
+	return parseStep(raw)
+}
+
 const planSystemPrompt = `You are Sentinel, an on-device DevOps copilot that runs fully offline.
 Convert the user's natural-language task into a minimal sequence of concrete shell or kubectl commands.
 
@@ -63,6 +75,26 @@ Examples:
   User: check my k8s pods
   Output: {"needs_input":{"prompt":"I don't have a kubeconfig. What's the path to your kubeconfig?","key":"kubernetes.kubeconfig"}}`
 
+const stepSystemPrompt = `You are Sentinel, an on-device read-only investigation agent.
+Given one task, local context, and redacted observations gathered so far, decide the SINGLE next step.
+
+Output ONLY one JSON object. No prose, no markdown code fences.
+
+Allowed JSON shapes:
+- {"command":"<one read-only diagnostic command>","done":false}
+- {"done":true,"conclusion":"<one-line evidence summary>"}
+- {"needs_input":{"prompt":"<one clear question for a missing non-secret reference>","key":"<dotted key or empty>"}}
+
+Rules:
+- Only propose read-only or diagnostic commands: kubectl get/describe/logs/top/explain/api-resources/cluster-info/version/config view, or shell inspection such as ls/cat/tail/head/grep/rg/ps/top/df/du/echo/pwd/whoami/date/uname.
+- Never propose destructive or mutating commands: rm, delete, apply, patch, edit, scale, set, restart, drain, stop, reboot, drop, truncate, chmod, writes, redirects, pipes, or chained commands.
+- Propose exactly one command. Do not use &&, ;, pipes, command substitution, or redirection.
+- Do not repeat any command already present in observations.
+- You MUST gather evidence before concluding: if "Redacted observations so far" is "none", you may NOT set done=true and you may NOT set needs_input — you MUST return a concrete read-only command (for a Kubernetes failure, start with "kubectl get pods -n <namespace>").
+- Only set done=true once observations actually contain command output that answers the task; the conclusion must reference what the observations showed.
+- Dig until you find the ROOT CAUSE, not just the symptom. If observations show a pod in CrashLoopBackOff/Error/Pending, the next step must fetch its logs (e.g. "kubectl logs -n <ns> -l <selector> --tail=20") or "kubectl describe pod" to learn WHY — do not conclude from pod status alone.
+- Set needs_input only when a non-secret reference such as a namespace, kubeconfig path, or resource name is missing. Never ask for passwords, tokens, keys, or credential contents.`
+
 func buildUserPrompt(task string, rag *LocalContext) string {
 	ctxLine := "none"
 	if rag != nil {
@@ -71,6 +103,20 @@ func buildUserPrompt(task string, rag *LocalContext) string {
 		}
 	}
 	return fmt.Sprintf("Local context: %s\n\nTask: %s", ctxLine, task)
+}
+
+func buildStepUserPrompt(task string, rag *LocalContext, observations []string) string {
+	ctxLine := "none"
+	if rag != nil {
+		if s := rag.Summary(); s != "" {
+			ctxLine = s
+		}
+	}
+	obsLine := "none"
+	if len(observations) > 0 {
+		obsLine = strings.Join(observations, "\n---\n")
+	}
+	return fmt.Sprintf("Local context: %s\n\nTask: %s\n\nRedacted observations so far:\n%s", ctxLine, task, obsLine)
 }
 
 type chatMessage struct {
@@ -92,6 +138,14 @@ type chatResponse struct {
 }
 
 func newChatRequest(model, system, user string, useSchema bool) chatRequest {
+	var responseFormat any
+	if useSchema {
+		responseFormat = planResponseFormat()
+	}
+	return newChatRequestWithResponseFormat(model, system, user, responseFormat)
+}
+
+func newChatRequestWithResponseFormat(model, system, user string, responseFormat any) chatRequest {
 	req := chatRequest{
 		Model: model,
 		Messages: []chatMessage{
@@ -100,8 +154,8 @@ func newChatRequest(model, system, user string, useSchema bool) chatRequest {
 		},
 		Stream: false,
 	}
-	if useSchema {
-		req.ResponseFormat = planResponseFormat()
+	if responseFormat != nil {
+		req.ResponseFormat = responseFormat
 	}
 	return req
 }
@@ -149,8 +203,48 @@ func planResponseFormat() any {
 	}
 }
 
+func stepResponseFormat() any {
+	return map[string]any{
+		"type": "json_schema",
+		"json_schema": map[string]any{
+			"name":   "sentinel_next_step",
+			"strict": false,
+			"schema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command": map[string]any{
+						"type": "string",
+					},
+					"done": map[string]any{
+						"type": "boolean",
+					},
+					"conclusion": map[string]any{
+						"type": "string",
+					},
+					"needs_input": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"prompt": map[string]any{"type": "string"},
+							"key":    map[string]any{"type": "string"},
+						},
+						"required": []string{"prompt"},
+					},
+				},
+			},
+		},
+	}
+}
+
 func openAIChat(ctx context.Context, baseURL, apiKey, model, system, user string, timeout time.Duration, useSchema bool) (string, error) {
-	body, err := json.Marshal(newChatRequest(model, system, user, useSchema))
+	var responseFormat any
+	if useSchema {
+		responseFormat = planResponseFormat()
+	}
+	return openAIChatWithResponseFormat(ctx, baseURL, apiKey, model, system, user, timeout, responseFormat)
+}
+
+func openAIChatWithResponseFormat(ctx context.Context, baseURL, apiKey, model, system, user string, timeout time.Duration, responseFormat any) (string, error) {
+	body, err := json.Marshal(newChatRequestWithResponseFormat(model, system, user, responseFormat))
 	if err != nil {
 		return "", err
 	}
@@ -186,21 +280,29 @@ func openAIChat(ctx context.Context, baseURL, apiKey, model, system, user string
 	return cr.Choices[0].Message.Content, nil
 }
 
+func extractJSONObject(raw string) (string, error) {
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start < 0 || end <= start {
+		return "", fmt.Errorf("%w: model did not return a JSON object", ErrIntentDowngrade)
+	}
+	return raw[start : end+1], nil
+}
+
 // parsePlan extracts the JSON object the model was asked to emit. A response
 // that contains no usable actions is treated as an intent downgrade rather than
 // a hard error, so the caller can prompt the user instead of guessing.
 func parsePlan(raw, source, task string) (*Plan, error) {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start < 0 || end <= start {
-		return nil, fmt.Errorf("%w: model did not return a JSON plan", ErrIntentDowngrade)
+	obj, err := extractJSONObject(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: model did not return a JSON plan", err)
 	}
 
 	var parsed struct {
 		Actions    []Action       `json:"actions"`
 		NeedsInput *Clarification `json:"needs_input"`
 	}
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(obj), &parsed); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrIntentDowngrade, err)
 	}
 	if parsed.NeedsInput != nil && strings.TrimSpace(parsed.NeedsInput.Prompt) != "" {
@@ -223,4 +325,36 @@ func parsePlan(raw, source, task string) (*Plan, error) {
 		}
 	}
 	return &Plan{Task: task, Actions: parsed.Actions, Source: source}, nil
+}
+
+func parseStep(raw string) (*Step, error) {
+	obj, err := extractJSONObject(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed Step
+	if err := json.Unmarshal([]byte(obj), &parsed); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrIntentDowngrade, err)
+	}
+	parsed.Command = strings.TrimSpace(parsed.Command)
+	parsed.Conclusion = strings.TrimSpace(parsed.Conclusion)
+	if parsed.NeedsInput != nil {
+		parsed.NeedsInput.Prompt = strings.TrimSpace(parsed.NeedsInput.Prompt)
+		parsed.NeedsInput.Key = strings.TrimSpace(parsed.NeedsInput.Key)
+		if parsed.NeedsInput.Prompt == "" {
+			return nil, fmt.Errorf("%w: model returned needs_input without a prompt", ErrIntentDowngrade)
+		}
+		return &parsed, nil
+	}
+	if parsed.Done {
+		if parsed.Conclusion == "" {
+			return nil, fmt.Errorf("%w: model returned done without a conclusion", ErrIntentDowngrade)
+		}
+		return &parsed, nil
+	}
+	if parsed.Command == "" {
+		return nil, fmt.Errorf("%w: model returned no command, conclusion, or needs_input", ErrIntentDowngrade)
+	}
+	return &parsed, nil
 }

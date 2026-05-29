@@ -33,6 +33,16 @@ type Plan struct {
 	NeedsInput *Clarification `json:"-"`
 }
 
+// Step is one bounded investigation decision for an on-device solve loop.
+// It either proposes one read-only command, declares the task sufficiently
+// investigated, or asks for one missing non-secret reference.
+type Step struct {
+	Command    string         `json:"command,omitempty"`
+	Done       bool           `json:"done,omitempty"`
+	Conclusion string         `json:"conclusion,omitempty"`
+	NeedsInput *Clarification `json:"needs_input,omitempty"`
+}
+
 // Clarification is a model-requested question whose answer may be stored under
 // a structured-memory dotted key.
 type Clarification struct {
@@ -50,4 +60,5 @@ var ErrIntentDowngrade = errors.New("local model could not handle the intent; re
 type Inferencer interface {
 	Name() string
 	Plan(ctx context.Context, task string, rag *LocalContext) (*Plan, error)
+	PlanNextStep(ctx context.Context, task string, rag *LocalContext, observations []string) (*Step, error)
 }

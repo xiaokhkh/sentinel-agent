@@ -62,6 +62,17 @@ func (m *mockProvider) Plan(_ context.Context, task string, _ *LocalContext) (*P
 	return &Plan{Task: task, Actions: actions, Source: m.Name()}, nil
 }
 
+func (m *mockProvider) PlanNextStep(ctx context.Context, task string, rag *LocalContext, observations []string) (*Step, error) {
+	plan, err := m.Plan(ctx, task, rag)
+	if err != nil {
+		return nil, err
+	}
+	if len(observations) >= len(plan.Actions) {
+		return &Step{Done: true, Conclusion: "mock investigation complete"}, nil
+	}
+	return &Step{Command: plan.Actions[len(observations)].Command}, nil
+}
+
 func containsAny(s string, subs ...string) bool {
 	for _, sub := range subs {
 		if strings.Contains(s, sub) {

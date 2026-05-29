@@ -16,6 +16,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xiaokhkh/sentinel-agent/internal/config"
 	"github.com/xiaokhkh/sentinel-agent/internal/engine"
@@ -318,6 +319,7 @@ func cmdPolicy(args []string) int {
 }
 
 const skillMaxOutputBytes = 8000
+const skillSolveMaxOutputBytes = 4000
 
 func cmdSkill(args []string) int {
 	if len(args) < 1 {
@@ -333,11 +335,189 @@ func cmdSkill(args []string) int {
 		return cmdSkillExec(args[1:])
 	case "policy":
 		return cmdSkillPolicy(args[1:])
+	case "solve":
+		return cmdSkillSolve(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown skill command %q\n\n", args[0])
 		printSkillUsage(os.Stderr)
 		return 2
 	}
+}
+
+type skillSolveStep struct {
+	Command  string `json:"command"`
+	Decision string `json:"decision"`
+	Rule     string `json:"rule"`
+	Output   string `json:"output"`
+}
+
+type skillSolveAction struct {
+	Command  string `json:"command"`
+	Decision string `json:"decision"`
+	Risk     string `json:"risk"`
+	Reason   string `json:"reason"`
+}
+
+type skillSolveResult struct {
+	Status         string            `json:"status"`
+	Task           string            `json:"task"`
+	Provider       string            `json:"provider"`
+	Mode           string            `json:"mode"`
+	Steps          []skillSolveStep  `json:"steps"`
+	ProposedAction *skillSolveAction `json:"proposed_action,omitempty"`
+	Conclusion     string            `json:"conclusion,omitempty"`
+	Prompt         string            `json:"prompt,omitempty"`
+	Key            string            `json:"key,omitempty"`
+	Note           string            `json:"note"`
+}
+
+func cmdSkillSolve(args []string) int {
+	fs := flag.NewFlagSet("skill solve", flag.ContinueOnError)
+	cfg := config.Load()
+	provider := fs.String("provider", cfg.Provider, "inference provider: mock|ollama|llamacpp|mlx")
+	baseURL := fs.String("base-url", cfg.BaseURL, "OpenAI-compatible endpoint base URL")
+	model := fs.String("model", cfg.Model, "model name/tag")
+	mode := fs.String("mode", cfg.Mode, "execution mode: readonly|auto|full")
+	maxSteps := fs.Int("max-steps", 5, "maximum read-only investigation steps")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	task := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if task == "" {
+		fmt.Fprintln(os.Stderr, `usage: guard skill solve [flags] "<natural language task>"`)
+		return 2
+	}
+	if *maxSteps < 1 {
+		*maxSteps = 1
+	}
+
+	pmode, ok := permission.ParseMode(*mode)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "error: unknown mode %q (readonly|auto|full)\n", *mode)
+		return 2
+	}
+
+	result := skillSolveResult{
+		Status:   "stuck",
+		Task:     redact.Redact(task),
+		Provider: redact.Redact(*provider),
+		Mode:     redact.Redact(string(pmode)),
+		Steps:    []skillSolveStep{},
+		Note:     "evidence is desensitized; cloud planner analyzes and decides next step",
+	}
+
+	if isLlamaCppProvider(*provider) {
+		if err := llama.EnsureServer(*model, *baseURL, 5*time.Minute); err != nil {
+			writeJSON(result)
+			return 1
+		}
+	}
+
+	inf, err := engine.NewProvider(engine.ProviderConfig{
+		Name:    *provider,
+		BaseURL: *baseURL,
+		Model:   *model,
+		APIKey:  cfg.APIKey,
+		Timeout: cfg.Timeout,
+	})
+	if err != nil {
+		writeJSON(result)
+		return 1
+	}
+
+	sem := semanticForConfig(withProviderConfig(cfg, *provider, *baseURL, *model))
+	redactText := func(text string) string {
+		return redactWithSemantic(sem, text)
+	}
+	result.Task = redactText(task)
+	result.Provider = redactText(inf.Name())
+	result.Mode = redactText(string(pmode))
+
+	guard := policy.New()
+	rag := engine.LoadLocalContext()
+	observations := []string{}
+	executed := map[string]bool{}
+
+	for i := 0; i < *maxSteps; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout+5*time.Second)
+		step, err := inf.PlanNextStep(ctx, task, rag, observations)
+		cancel()
+		if err != nil || step == nil {
+			result.Status = "stuck"
+			return writeJSON(result)
+		}
+
+		if step.NeedsInput != nil {
+			result.Status = "needs_input"
+			result.Prompt = redactText(step.NeedsInput.Prompt)
+			result.Key = redactText(step.NeedsInput.Key)
+			return writeJSON(result)
+		}
+		if step.Done {
+			result.Status = "completed"
+			result.Conclusion = redactText(step.Conclusion)
+			return writeJSON(result)
+		}
+
+		command := strings.TrimSpace(step.Command)
+		if command == "" {
+			result.Status = "stuck"
+			return writeJSON(result)
+		}
+		if executed[command] {
+			result.Status = "completed"
+			result.Conclusion = "model repeated an already executed read-only command; no new evidence requested"
+			return writeJSON(result)
+		}
+
+		verdict := guard.Evaluate(command)
+		if sem != nil {
+			verdict = sem.ClassifyCommand(context.Background(), command, verdict)
+		}
+		if unsafeShellOperator(command) && verdict.Decision == policy.Allow {
+			verdict = policy.Verdict{
+				Decision: policy.Block,
+				Rule:     "solve-single-command",
+				Reason:   "compound shell syntax is not allowed in autonomous solve mode",
+				Risk:     policy.RiskHigh,
+			}
+		}
+		outcome := permission.Decide(verdict.Decision, pmode)
+		if verdict.Decision == policy.Allow && outcome == permission.Run {
+			out, _ := osexec.Command("sh", "-c", command).CombinedOutput()
+			output := capUTF8(redactText(string(out)), skillSolveMaxOutputBytes)
+			redactedCommand := redactText(command)
+			result.Steps = append(result.Steps, skillSolveStep{
+				Command:  redactedCommand,
+				Decision: redactText(string(verdict.Decision)),
+				Rule:     redactText(verdict.Rule),
+				Output:   output,
+			})
+			executed[command] = true
+			observations = append(observations, redactedCommand+" -> "+compactObservation(output))
+			continue
+		}
+
+		result.ProposedAction = &skillSolveAction{
+			Command:  redactText(command),
+			Decision: redactText(string(verdict.Decision)),
+			Risk:     redactText(string(verdict.Risk)),
+			Reason:   redactText(verdict.Reason),
+		}
+		switch verdict.Decision {
+		case policy.Confirm:
+			result.Status = "needs_approval"
+		case policy.Block:
+			result.Status = "blocked"
+		default:
+			result.Status = "stuck"
+		}
+		return writeJSON(result)
+	}
+
+	result.Status = "stuck"
+	return writeJSON(result)
 }
 
 func cmdSkillContext() int {
@@ -570,6 +750,35 @@ func redactWithSemantic(c *semantic.Classifier, text string) string {
 	return c.RedactText(context.Background(), text)
 }
 
+func capUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n]
+	for !utf8.ValidString(s) && len(s) > 0 {
+		s = s[:len(s)-1]
+	}
+	return s + "\n...[truncated]"
+}
+
+func compactObservation(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	return capUTF8(s, 800)
+}
+
+func unsafeShellOperator(command string) bool {
+	return strings.Contains(command, "\n") ||
+		strings.Contains(command, "\r") ||
+		strings.Contains(command, "&&") ||
+		strings.Contains(command, "||") ||
+		strings.Contains(command, ";") ||
+		strings.Contains(command, "|") ||
+		strings.Contains(command, ">") ||
+		strings.Contains(command, "<") ||
+		strings.Contains(command, "`") ||
+		strings.Contains(command, "$(")
+}
+
 func writeJSON(v any) int {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -584,6 +793,7 @@ func printSkillUsage(w io.Writer) {
 	fmt.Fprint(w, `usage:
   guard skill context                         print non-secret local context as JSON
   guard skill plan [flags] "<task>"           plan locally and return screened JSON actions
+  guard skill solve [flags] "<task>"          run bounded read-only investigation and return redacted JSON evidence
   guard skill exec [flags] "<command>"        run one allowed command and return redacted JSON output
   guard skill policy "<command>"              classify one command as JSON
 
@@ -707,7 +917,7 @@ func printUsage(w *os.File) {
 usage:
   guard run [flags] "<natural language task>"   plan (and optionally run) an ops task
   guard policy check "<command>"                test a command against the Policy Guard
-  guard skill <context|plan|exec|policy>        JSON interface for Sentinel Skill agents
+  guard skill <context|plan|solve|exec|policy>  JSON interface for Sentinel Skill agents
   guard skills                                  list available capability packs
   guard context                                 show local RAG context (no secrets)
   guard config                                  show structured memory config

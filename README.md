@@ -148,7 +148,9 @@ Skill package: [docs/skills/sentinel-agent/SKILL.md](docs/skills/sentinel-agent/
 It is the agent-facing contract: when to inspect local context, when to plan, when to execute, and
 when to stop for approval.
 
-CLI calls used by the Skill: `guard skill context`, `guard skill plan`, `guard skill exec`, and
+CLI calls used by the Skill: `guard skill context`, **`guard skill solve`** (delegate a whole task —
+the on-device agent runs a bounded read-only investigation loop and returns redacted evidence,
+escalating any mutating step for approval), `guard skill plan`, `guard skill exec`, and
 `guard skill policy`.
 The Skill runtime's autonomy is set by `SENTINEL_MODE` (default `readonly`); the agent client's
 own tool-approval prompt is the human gate for `ask`-tier (mutating) steps.

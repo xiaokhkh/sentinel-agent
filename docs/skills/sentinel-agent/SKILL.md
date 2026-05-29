@@ -18,10 +18,11 @@ Use Sentinel Skill for private-infrastructure work. The agent plans at a high le
 ## Tool flow
 
 1. Use `guard skill context` first when you need to understand what local ops context exists. It returns a non-secret JSON summary only.
-2. Use `guard skill plan "<task>"` for natural-language ops requests. It plans locally and screens every action through Policy Guard.
-3. Use `guard skill exec "<command>"` for one concrete read-only command from the screened plan. Its output is redacted before returning.
-4. Use `guard skill policy "<command>"` before proposing or discussing a risky concrete command.
-5. Parse the JSON response. Do not scrape human CLI output.
+2. Use `guard skill solve "<task>"` to delegate a whole investigation: Sentinel autonomously runs a few bounded READ-ONLY steps on-device, redacts everything, and returns consolidated JSON evidence plus a `status`. If `status` is `needs_approval` or `blocked`, it found a mutating/dangerous next action it refused to run — decide based on `proposed_action`. Prefer this for "diagnose / investigate / why is X failing" tasks.
+3. Use `guard skill plan "<task>"` when you want the screened plan but intend to drive execution step by step yourself.
+4. Use `guard skill exec "<command>"` for one concrete command. Read-only commands run and return redacted output; mutating commands return `approval_required` (run with `--mode auto` only after the user approves).
+5. Use `guard skill policy "<command>"` before proposing or discussing a risky concrete command.
+6. Parse the JSON response. Do not scrape human CLI output.
 
 ## Safety rules
 

@@ -136,8 +136,9 @@ guard skill context
 Skill 包：[docs/skills/sentinel-agent/SKILL.md](docs/skills/sentinel-agent/SKILL.md)。
 它是 Agent 侧契约：什么时候看本地上下文、什么时候规划、什么时候执行、什么时候停下来等审批。
 
-Skill 使用的 CLI 调用：`guard skill context`、`guard skill plan`、`guard skill exec`、
-`guard skill policy`。Skill 运行时自治级别由 `SENTINEL_MODE` 决定（默认 `readonly`）；
+Skill 使用的 CLI 调用：`guard skill context`、**`guard skill solve`**（把整个任务交给端侧 agent——
+它自主跑有界只读调查 loop、回传脱敏证据,遇到变更步骤则升级请求审批）、`guard skill plan`、
+`guard skill exec`、`guard skill policy`。Skill 运行时自治级别由 `SENTINEL_MODE` 决定（默认 `readonly`）；
 对 `ask` 级（变更类）步骤，Agent 客户端自身的工具调用审批弹窗即人工门。
 
 ## 架构与流程
